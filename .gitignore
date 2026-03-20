@@ -45,3 +45,7 @@ metrics.json
 # criterion outputs
 bench-results/
 bench-results-large/
+
+# nsys
+reth.nsys-rep
+reth.sqlite
