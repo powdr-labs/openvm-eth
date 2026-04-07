@@ -46,6 +46,10 @@ metrics.json
 bench-results/
 bench-results-large/
 
-# nsys
-reth.nsys-rep
-reth.sqlite
+# nvidia
+*.ncu-rep
+*.nsys-rep
+*.sqlite
+
+# openvm
+bin/stateless-guest/openvm/
