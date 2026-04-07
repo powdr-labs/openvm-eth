@@ -212,8 +212,6 @@ pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) ->
     }
 
     vm_config.as_mut().segmentation_config.main_cell_weight = 1 + (1 << app_log_blowup);
-    vm_config.as_mut().segmentation_config.main_cell_secondary_weight =
-        (D_EF * 2) as f64 / (1 << app_l_skip) as f64; // folding trace to MLE in EF, with rotation
 
     for (air_idx, air) in VmCircuitConfig::<SC>::create_airs(&vm_config)?.into_airs().enumerate() {
         tracing::debug!("air_idx={air_idx} | {}", air.name());
