@@ -381,13 +381,11 @@ pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) ->
                     let block_hash = hex::encode(&public_values);
                     info!("Execute metered completed, block hash: {}", block_hash);
                     println!("BENCH_BLOCK_HASH={block_hash}");
-                    println!("BENCH_NUM_SEGMENTS={}", segments.len());
                 }
                 BenchMode::ProveApp => {
                     let mut prover = sdk.app_prover(exe)?;
                     prover.set_program_name(program_name);
                     let app_proof = prover.prove(stdin)?;
-                    println!("BENCH_NUM_SEGMENTS={}", app_proof.per_segment.len());
                     let (_, app_vk) = sdk.app_keygen();
                     verify_segments(&prover.vm().engine, &app_vk.vk, &app_proof.per_segment)?;
                 }

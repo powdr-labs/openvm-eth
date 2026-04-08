@@ -169,6 +169,9 @@ on:
       gpu_peak_memory_mib:
         description: "Peak GPU memory usage in MiB"
         value: ${{ jobs.run-reth.outputs.gpu_peak_memory_mib }}
+      num_segments:
+        description: "Number of segments"
+        value: ${{ jobs.run-reth.outputs.num_segments }}
 
 env:
   S3_MD_PATH: s3://axiom-workflow-data-sandbox-us-east-1/benchmark/github/results
@@ -191,6 +194,7 @@ jobs:
       metric_name: ${{ steps.set-metric-name.outputs.name }}
       gpu_memory_svg_url: ${{ steps.set-metric-name.outputs.memory_svg_url }}
       gpu_peak_memory_mib: ${{ steps.report-gpu-memory.outputs.peak_memory_mib }}
+      num_segments: ${{ steps.report-segments.outputs.num_segments }}
     steps:
       - uses: runs-on/action@v2
       - uses: actions/checkout@v5
@@ -475,10 +479,6 @@ jobs:
             echo "MEM_USAGE_PATH=memory_usage.png" >> $GITHUB_ENV
           fi
 
-          # Extract benchmark outputs
-          if grep -q "BENCH_NUM_SEGMENTS=" benchmark_output.log 2>/dev/null; then
-            grep "BENCH_NUM_SEGMENTS=" benchmark_output.log >> $GITHUB_ENV
-          fi
 
       - name: Report GPU peak memory
         id: report-gpu-memory
@@ -488,9 +488,15 @@ jobs:
           echo "### GPU Memory" >> $GITHUB_STEP_SUMMARY
           echo "Peak GPU memory usage: **$(awk "BEGIN{printf \"%.2f\",${GPU_PEAK_MEMORY_MIB}/1024}") GB**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          if [[ -n "${BENCH_NUM_SEGMENTS}" ]]; then
+
+      - name: Report segments
+        id: report-segments
+        run: |
+          NUM_SEGMENTS=$(jq '[.gauge[] | .labels[] | select(.[0] == "segment") | .[1]] | unique | length' "${METRIC_PATH}" 2>/dev/null || echo "")
+          echo "num_segments=${NUM_SEGMENTS}" >> $GITHUB_OUTPUT
+          if [[ -n "${NUM_SEGMENTS}" && "${NUM_SEGMENTS}" -gt 0 ]]; then
             echo "### Segments" >> $GITHUB_STEP_SUMMARY
-            echo "Number of segments: **${BENCH_NUM_SEGMENTS}**" >> $GITHUB_STEP_SUMMARY
+            echo "Number of segments: **${NUM_SEGMENTS}**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
           fi
 
