@@ -174,12 +174,12 @@ on:
         value: ${{ jobs.run-reth.outputs.num_segments }}
 
 env:
-  S3_MD_PATH: s3://axiom-workflow-data-sandbox-us-east-1/benchmark/github/results
-  S3_FIXTURE_PATH: s3://axiom-public-data-sandbox-us-east-1/benchmark/github/fixtures
-  S3_METRICS_PATH: s3://axiom-workflow-data-sandbox-us-east-1/benchmark/github/metrics
-  S3_PUBLIC_PATH_BASE: s3://axiom-public-data-sandbox-us-east-1/benchmark/github
-  S3_PUBLIC_URL_BASE: https://axiom-public-data-sandbox-us-east-1.s3.us-east-1.amazonaws.com/benchmark/github
-  S3_SAMPLY_PROFILE_PATH: s3://axiom-public-data-sandbox-us-east-1/benchmark/github/samply
+  S3_MD_PATH: s3://${{ vars.S3_WORKFLOW_DATA_BUCKET }}/benchmark/github/results
+  S3_FIXTURE_PATH: s3://${{ vars.S3_PUBLIC_DATA_BUCKET }}/benchmark/github/fixtures
+  S3_METRICS_PATH: s3://${{ vars.S3_WORKFLOW_DATA_BUCKET }}/benchmark/github/metrics
+  S3_PUBLIC_PATH_BASE: s3://${{ vars.S3_PUBLIC_DATA_BUCKET }}/benchmark/github
+  S3_PUBLIC_URL_BASE: https://${{ vars.S3_PUBLIC_DATA_BUCKET }}.s3.${{ vars.S3_REGION }}.amazonaws.com/benchmark/github
+  S3_SAMPLY_PROFILE_PATH: s3://${{ vars.S3_PUBLIC_DATA_BUCKET }}/benchmark/github/samply
   CMD_ARGS: ""
   INPUT_ARGS: ""
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -197,6 +197,9 @@ jobs:
       num_segments: ${{ steps.report-segments.outputs.num_segments }}
     steps:
       - uses: runs-on/action@v2
+        with:
+          sccache: s3
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.ref || github.head_ref || github.ref }}
@@ -256,9 +259,11 @@ jobs:
 
       - name: Checkout openvm (for scripts)
         run: git clone --depth=1 --branch="develop-v2.0.0-rc.1" https://github.com/openvm-org/openvm.git
-      - name: Install openvm-prof
-        working-directory: openvm/crates/prof
-        run: cargo install --force --profile=dev --path .
+      - name: Build openvm-prof
+        working-directory: openvm
+        run: |
+          cargo build -p openvm-prof
+          echo "${{ github.workspace }}/openvm/target/debug" >> $GITHUB_PATH
       - name: Install architecture specific tools
         run: |
           source openvm/ci/scripts/utils.sh
@@ -339,17 +344,12 @@ jobs:
           path: bin/reth-benchmark/elf/openvm-stateless-guest
           key: ${{ steps.set-cache-keys.outputs.elf_cache_key }}
 
-      - name: Install cargo-openvm
-        if: steps.cache-guest-elf-restore.outputs.cache-hit != 'true' && steps.cache-cargo-openvm-restore.outputs.cache-hit != 'true'
+      - name: Build cargo-openvm
+        if: steps.cache-guest-elf-restore.outputs.cache-hit != 'true'
+        working-directory: openvm
         run: |
-          cargo install --git https://github.com/openvm-org/openvm.git --branch "develop-v2.0.0-rc.1" --locked --force cargo-openvm
-
-      - name: Save cargo-openvm to cache
-        if: steps.cache-guest-elf-restore.outputs.cache-hit != 'true' && steps.cache-cargo-openvm-restore.outputs.cache-hit != 'true'
-        uses: runs-on/cache/save@v4
-        with:
-          path: ~/.cargo/bin/cargo-openvm
-          key: ${{ steps.cache-cargo-openvm-restore.outputs.cache-primary-key }}
+          cargo build --locked -p cargo-openvm
+          echo "${{ github.workspace }}/openvm/target/debug" >> $GITHUB_PATH
       - name: Build Guest ELF
         if: steps.cache-guest-elf-restore.outputs.cache-hit != 'true'
         working-directory: bin/stateless-guest
@@ -577,17 +577,24 @@ jobs:
           if-no-files-found: warn
           retention-days: 1
 
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
       ### Update gh-pages
       - uses: actions/checkout@v4
         with:
           ref: gh-pages
+          path: gh-pages
 
       - name: Set up git
+        working-directory: gh-pages
         run: |
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
 
       - name: Commit to gh-pages branch
+        working-directory: gh-pages
         run: |
           GH_PAGES_PATH="benchmarks-dispatch/${{ github.head_ref || github.ref }}"
           echo "GH_PAGES_PATH=${GH_PAGES_PATH}" >> $GITHUB_ENV
@@ -619,6 +626,7 @@ jobs:
           fi
 
       - name: Update summary with results
+        working-directory: gh-pages
         run: |
           RESULT_URL="https://github.com/${{ github.repository }}/blob/gh-pages/${GH_PAGES_PATH}/${METRIC_NAME}.md"
           echo "### Results" >> $GITHUB_STEP_SUMMARY
@@ -627,5 +635,6 @@ jobs:
           cat "${GH_PAGES_PATH}/${METRIC_NAME}.md" >> $GITHUB_STEP_SUMMARY
 
       - name: Path to result
+        working-directory: gh-pages
         run: |
           echo "https://github.com/${{ github.repository }}/blob/gh-pages/${GH_PAGES_PATH}/${METRIC_NAME}.md"
