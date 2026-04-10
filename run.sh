@@ -204,8 +204,8 @@ case "${PROFILE_OVERRIDE:-release}" in
 esac
 FEATURES="parallel,metrics,jemalloc,unprotected"
 BLOCK_NUMBER="${BLOCK_NUMBER_OVERRIDE:-23992138}"
-# switch to +nightly-2025-08-19 if using tco
-TOOLCHAIN="+nightly-2025-08-19" # "+stable"
+# switch to +nightly-2026-01-18 if using tco
+TOOLCHAIN="+nightly-2026-01-18" # "+stable"
 BIN_NAME="openvm-reth-benchmark"
 MAX_SEGMENT_LENGTH=$((1 << 22))
 segment_max_memory=$((15 << 30))

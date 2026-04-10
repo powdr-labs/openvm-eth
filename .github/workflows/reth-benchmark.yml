@@ -422,7 +422,7 @@ jobs:
         run: |
           export JEMALLOC_SYS_WITH_MALLOC_CONF=${JEMALLOC_SYS_WITH_MALLOC_CONF}
           HOST_PROFILE=${{ steps.set-build-profiles.outputs.host_profile }}
-          TOOLCHAIN="+nightly-2025-08-19"
+          TOOLCHAIN="+nightly-2026-01-18"
           RUSTFLAGS=$RUSTFLAGS cargo $TOOLCHAIN build --bin ${{ env.BIN_NAME }} --profile=$HOST_PROFILE --no-default-features --features=$FEATURES
 
       - name: Save Host Binary to cache
