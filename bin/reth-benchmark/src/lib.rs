@@ -11,7 +11,7 @@ use alloy_provider::RootProvider;
 use alloy_rpc_client::RpcClient;
 use alloy_transport::layers::RetryBackoffLayer;
 use clap::Parser;
-use openvm_circuit::arch::{instructions::exe::VmExe, *};
+use openvm_circuit::arch::*;
 use openvm_rpc_proxy::{RpcExecutor, DEFAULT_PREIMAGE_CACHE_NIBBLES};
 use openvm_sdk::{
     config::{
@@ -19,17 +19,15 @@ use openvm_sdk::{
         DEFAULT_INTERNAL_LOG_BLOWUP, DEFAULT_LEAF_LOG_BLOWUP,
     },
     fs::write_object_to_file,
-    Sdk, StdIn, SC,
+    StdIn, SC,
 };
-use openvm_sdk_config::{SdkVmConfig, TranspilerConfig};
+use openvm_sdk_config::SdkVmConfig;
 use openvm_stark_sdk::{
     bench::run_with_metric_collection,
     config::{
-        app_params_with_100_bits_security, internal_params_with_100_bits_security,
-        leaf_params_with_100_bits_security,
+        app_params_with_100_bits_security, baby_bear_poseidon2::F,
+        internal_params_with_100_bits_security, leaf_params_with_100_bits_security,
         log_up_params::log_up_security_params_baby_bear_100_bits,
-        baby_bear_poseidon2::{D_EF, F},
-        MAX_APP_LOG_STACKED_HEIGHT,
     },
     openvm_stark_backend::{
         air_builders::symbolic::{SymbolicExpressionDag, SymbolicExpressionNode},
@@ -42,7 +40,7 @@ use openvm_stark_sdk::{
 use openvm_stateless_executor::{
     io::StatelessExecutorInput, ChainVariant, StatelessExecutor, CHAIN_ID_ETH_MAINNET,
 };
-use openvm_transpiler::{elf::Elf, openvm_platform::memory::MEM_SIZE, FromElf};
+use openvm_transpiler::{elf::Elf, openvm_platform::memory::MEM_SIZE};
 use openvm_verify_stark_host::{
     verify_vm_stark_proof_decoded,
     vk::{write_vk_to_file, VmStarkVerifyingKey},
@@ -350,9 +348,13 @@ pub struct PrecomputedProverData {
     program: CompiledProgram<RiscvISA>,
 }
 
-/// Compile the APC-specialised program and cache the result on disk.
+/// Compile the APC-specialised program and cache the result on disk. When
+/// `args.apc == 0` this is a fast identity specialisation — no PGO, no APCs
+/// selected, and `compile_exe` returns a `SpecializedConfig` that wraps the
+/// given `vm_config` with zero autoprecompiles.
 pub async fn precompute_prover_data(
     args: &HostArgs,
+    vm_config: &ExtendedVmConfig,
     openvm_client_eth_elf: &[u8],
 ) -> eyre::Result<PrecomputedProverData> {
     // OpenVM only installs its tracing subscriber when `run_with_metric_collection`
@@ -396,29 +398,40 @@ pub async fn precompute_prover_data(
         args.apc, args.pgo_type
     );
 
-    let block_number = args
-        .block_number
-        .ok_or_else(|| eyre::eyre!("--block-number is required for mode compile"))?;
-
-    let pgo_blocks: Vec<u64> = if args.pgo_block_numbers.is_empty() {
-        vec![block_number]
+    // PGO is only meaningful when we'll actually select APCs. With --apc 0
+    // skip it — `compile_exe` is called with `PgoConfig::None` below either
+    // way, but this also saves us from executing the guest N times just to
+    // produce a profile nothing will consume.
+    let pgo_stdins = if args.apc == 0 {
+        Vec::new()
     } else {
-        args.pgo_block_numbers.clone()
+        let block_number = args
+            .block_number
+            .ok_or_else(|| eyre::eyre!("--block-number is required for APC compile"))?;
+        let pgo_blocks: Vec<u64> = if args.pgo_block_numbers.is_empty() {
+            vec![block_number]
+        } else {
+            args.pgo_block_numbers.clone()
+        };
+        let provider_config = args.provider.clone().into_provider().await?;
+        let mut pgo_stdins = Vec::new();
+        for block_id in pgo_blocks {
+            let pgo_input = load_stateless_input(
+                &provider_config,
+                &args.cache_dir,
+                CHAIN_ID_ETH_MAINNET,
+                block_id,
+                args.preimage_cache_nibbles,
+            )
+            .await?;
+            let mut stdin = StdIn::default();
+            stdin.write(&pgo_input);
+            pgo_stdins.push(stdin);
+        }
+        pgo_stdins
     };
 
-    let provider_config = args.provider.clone().into_provider().await?;
-    let mut pgo_stdins = Vec::new();
-    for block_id in pgo_blocks {
-        let pgo_input =
-            apc_get_stateless_input(&provider_config, &args.cache_dir, CHAIN_ID_ETH_MAINNET,
-                block_id, args.preimage_cache_nibbles).await?;
-        let mut stdin = StdIn::default();
-        stdin.write(&pgo_input);
-        pgo_stdins.push(stdin);
-    }
-
-    let vm_config = reth_extended_vm_config();
-    let system_params = app_params_with_100_bits_security(MAX_APP_LOG_STACKED_HEIGHT);
+    let system_params = app_params_with_100_bits_security(DEFAULT_LOG_STACKED_HEIGHT);
     let app_config = AppConfig::new(vm_config.clone(), system_params);
 
     let exe = {
@@ -432,10 +445,11 @@ pub async fn precompute_prover_data(
     let elf = powdr_riscv_elf::load_elf_from_buffer(openvm_client_eth_elf);
 
     let program = compile_apc_program(
-        OriginalCompiledProgram::new(exe, OriginalVmConfig::new(vm_config), elf),
+        OriginalCompiledProgram::new(exe, OriginalVmConfig::new(vm_config.clone()), elf),
         args.apc,
         args.apc_skip,
-        args.pgo_type,
+        // With --apc 0, nothing to select, so force PGO off regardless of flag.
+        if args.apc == 0 { PgoType::None } else { args.pgo_type },
         pgo_stdins,
         app_config,
     )?;
@@ -493,9 +507,9 @@ fn compile_apc_program<'a>(
         .map_err(|e| eyre::eyre!("compile_exe failed: {e}"))
 }
 
-/// APC-path equivalent of axiom's inline input-loading (uses the same bincode
-/// cache format).
-async fn apc_get_stateless_input(
+/// Load stateless input either from bincode cache under `cache_dir` or by
+/// fetching from RPC. Shared by the PGO input loader and the main flow.
+async fn load_stateless_input(
     provider_config: &cli::ProviderConfig,
     cache_dir: &Option<PathBuf>,
     chain_id: u64,
@@ -533,140 +547,29 @@ async fn apc_get_stateless_input(
     Ok(stateless_input)
 }
 
-/// APC-specific execution path. Invoked when `--apc > 0` or mode is `Compile`.
-/// Parallels axiom's main flow but uses `PowdrSdkGpu`/`PowdrSdkCpu` over a
-/// `SpecializedConfig` produced by the powdr APC compile step. Lands before
-/// axiom's main flow to keep those paths unmodified.
-async fn run_apc_path(
-    args: HostArgs,
-    openvm_client_eth_elf: &[u8],
-) -> eyre::Result<()> {
-    let PrecomputedProverData { program } =
-        precompute_prover_data(&args, openvm_client_eth_elf).await?;
-    let CompiledProgram { exe, mut vm_config } = program;
-
-    if matches!(args.mode, BenchMode::Compile) {
-        info!("APC compile finished (cache key: {})", args.apc_setup_name);
-        return Ok(());
-    }
-
-    // Apply the same segmentation / cell-weight knobs that axiom's non-APC path
-    // applies from `BenchmarkCli` (max_segment_length, segment_max_memory,
-    // app_log_blowup). `--max-segment-height` is APC-specific and takes
-    // precedence over `--max-segment-length` when both are set.
-    {
-        let segmentation = &mut vm_config
-            .original
-            .config_mut()
-            .sdk
-            .as_mut()
-            .segmentation_config;
-        if let Some(max) = args.max_segment_height {
-            assert!(
-                max.is_power_of_two(),
-                "--max-segment-height must be a power of two, got {max}",
-            );
-            segmentation.limits.set_max_trace_height(max);
-            tracing::info!("Capping max segment height at {max}");
-        } else if let Some(max_trace_height) = args.benchmark.max_segment_length {
-            segmentation.limits.set_max_trace_height(max_trace_height);
-        }
-        if let Some(max_memory) = args.benchmark.segment_max_memory {
-            segmentation.limits.set_max_memory(max_memory);
-        }
-        segmentation.main_cell_weight = 1 + (1 << args.benchmark.app_log_blowup);
-    }
-
-    let specialized_app_config =
-        AppConfig::new(vm_config, app_params_with_100_bits_security(MAX_APP_LOG_STACKED_HEIGHT));
-    let agg_params =
-        build_agg_params(args.leaf_log_stacked_height, args.internal_log_stacked_height);
-    #[cfg(feature = "cuda")]
-    let specialized_sdk = PowdrSdkGpu::<RiscvISA>::new(specialized_app_config, agg_params)?;
-    #[cfg(not(feature = "cuda"))]
-    let specialized_sdk = PowdrSdkCpu::<RiscvISA>::new(specialized_app_config, agg_params)?;
-
-    let block_number = args
-        .block_number
-        .ok_or_else(|| eyre::eyre!("--block-number is required for mode {}", args.mode))?;
-    let program_name = format!("reth.{}.block_{}", args.mode, block_number);
-
-    let stateless_input = if let Some(path) = args.input_path.as_ref() {
-        try_load_input_from_path(path)?
-    } else {
-        let provider_config = args.provider.clone().into_provider().await?;
-        if provider_config.chain_id != CHAIN_ID_ETH_MAINNET {
-            eyre::bail!("unknown chain ID: {}", provider_config.chain_id);
-        }
-        apc_get_stateless_input(
-            &provider_config,
-            &args.cache_dir,
-            provider_config.chain_id,
-            block_number,
-            args.preimage_cache_nibbles,
-        )
-        .await?
-    };
-
-    let mut stdin = StdIn::default();
-    stdin.write(&stateless_input);
-
-    run_with_metric_collection("OUTPUT_PATH", || {
-        info_span!("reth-block", block_number = block_number).in_scope(
-            || -> eyre::Result<()> {
-                match args.mode {
-                    BenchMode::ProveApp => {
-                        let mut prover = specialized_sdk
-                            .app_prover(exe.clone())?
-                            .with_program_name(program_name);
-                        let _proof = prover.prove(stdin)?;
-                        info!("App proof generated");
-                    }
-                    BenchMode::ProveStark => {
-                        let mut prover = specialized_sdk
-                            .prover(exe.clone())?
-                            .with_program_name(program_name);
-                        let (_proof, _baseline) = prover.prove(stdin, &[])?;
-                        info!("STARK proof (with recursion) generated");
-                    }
-                    _ => eyre::bail!(
-                        "APC path only supports --mode prove-app / prove-stark / compile (got {})",
-                        args.mode
-                    ),
-                }
-                Ok(())
-            },
-        )
-    })?;
-    Ok(())
-}
-
 pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) -> eyre::Result<()> {
     // Initialize the environment variables.
     dotenv::dotenv().ok();
 
-    // APC fork: for `--mode compile` (always) or other modes with `--apc > 0`
-    // (prove-app / prove-stark), run via powdr's specialised SDK. Every other
-    // mode continues through axiom's untouched path below.
-    if matches!(args.mode, BenchMode::Compile) || args.apc > 0 {
-        return run_apc_path(args, openvm_client_eth_elf).await;
-    }
-
     let app_log_blowup = args.benchmark.app_log_blowup;
-    let app_l_skip = args.benchmark.app_l_skip;
+    let _app_l_skip = args.benchmark.app_l_skip;
 
     #[cfg(feature = "cuda")]
     println!("CUDA Backend Enabled");
 
-    let mut vm_config = reth_vm_config();
+    // Every run goes through powdr's machinery — with `--apc 0` it degenerates
+    // into an identity specialisation (zero APCs, no PGO) that's
+    // functionally equivalent to axiom's vanilla path. The circuit shape
+    // differs by one empty AIR (`HintsExtension`) that's inert unless the
+    // guest uses hints instructions.
+    let mut vm_config = reth_extended_vm_config();
     if let Some(max_trace_height) = args.benchmark.max_segment_length {
-        vm_config.as_mut().segmentation_config.limits.set_max_trace_height(max_trace_height);
+        vm_config.sdk.as_mut().segmentation_config.limits.set_max_trace_height(max_trace_height);
     }
     if let Some(max_memory) = args.benchmark.segment_max_memory {
-        vm_config.as_mut().segmentation_config.limits.set_max_memory(max_memory);
+        vm_config.sdk.as_mut().segmentation_config.limits.set_max_memory(max_memory);
     }
-
-    vm_config.as_mut().segmentation_config.main_cell_weight = 1 + (1 << app_log_blowup);
+    vm_config.sdk.as_mut().segmentation_config.main_cell_weight = 1 + (1 << app_log_blowup);
 
     for (air_idx, air) in VmCircuitConfig::<SC>::create_airs(&vm_config)?.into_airs().enumerate() {
         tracing::debug!("air_idx={air_idx} | {}", air.name());
@@ -679,22 +582,48 @@ pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) ->
         todo!();
     }
 
-    let transpiler = vm_config.transpiler().clone();
+    // APC compile (cached). With --apc 0 this is a fast identity pass that
+    // produces a `SpecializedConfig` over `vm_config` and an unmodified exe.
+    let PrecomputedProverData { program } =
+        precompute_prover_data(&args, &vm_config, openvm_client_eth_elf).await?;
+    let CompiledProgram { exe, vm_config: mut specialized_vm_config, .. } = program;
+
+    if matches!(args.mode, BenchMode::Compile) {
+        info!("APC compile finished (cache key: {})", args.apc_setup_name);
+        return Ok(());
+    }
+
+    // Post-compile override: `--max-segment-height` wins over
+    // `--max-segment-length` when both are set.
+    if let Some(max) = args.max_segment_height {
+        assert!(
+            max.is_power_of_two(),
+            "--max-segment-height must be a power of two, got {max}"
+        );
+        specialized_vm_config
+            .original
+            .config_mut()
+            .sdk
+            .as_mut()
+            .segmentation_config
+            .limits
+            .set_max_trace_height(max);
+        tracing::info!("Capping max segment height at {max}");
+    }
 
     let app_params = app_params_with_100_bits_security(DEFAULT_LOG_STACKED_HEIGHT);
-
-    // Setup: this can all be done once before receiving proof input
-    let app_config = AppConfig::new(vm_config, app_params);
-    let agg_params = AggregationSystemParams::default();
-    let sdk = Sdk::new(app_config, agg_params)?;
+    let app_config = AppConfig::new(specialized_vm_config, app_params);
+    let agg_params =
+        build_agg_params(args.leaf_log_stacked_height, args.internal_log_stacked_height);
+    #[cfg(feature = "cuda")]
+    let sdk = PowdrSdkGpu::<RiscvISA>::new(app_config, agg_params)?;
+    #[cfg(not(feature = "cuda"))]
+    let sdk = PowdrSdkCpu::<RiscvISA>::new(app_config, agg_params)?;
 
     if matches!(args.mode, BenchMode::DumpAirStats) {
         dump_air_stats(&sdk, &args.air_stats_path)?;
         return Ok(());
     }
-
-    let elf = Elf::decode(openvm_client_eth_elf, MEM_SIZE as u32)?;
-    let exe = VmExe::from_elf(elf, transpiler)?;
 
     if matches!(args.mode, BenchMode::GenerateVmVkey) {
         let prover = sdk.prover(exe)?;
@@ -714,66 +643,22 @@ pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) ->
 
     let program_name = format!("reth.{}.block_{}", args.mode, block_number);
 
-    // Parse the command line arguments.
-    let stateless_input_from_path =
-        args.input_path.as_ref().map(|path| try_load_input_from_path(path).unwrap());
-
-    let stateless_input = if let Some(stateless_input_from_path) = stateless_input_from_path {
-        stateless_input_from_path
+    // Load / fetch stateless input.
+    let stateless_input = if let Some(path) = args.input_path.as_ref() {
+        try_load_input_from_path(path)?
     } else {
-        let provider_config = args.provider.into_provider().await?;
-        match provider_config.chain_id {
-            #[allow(non_snake_case)]
-            CHAIN_ID_ETH_MAINNET => (),
-            _ => {
-                eyre::bail!("unknown chain ID: {}", provider_config.chain_id);
-            }
-        };
-        let stateless_input_from_cache = try_load_input_from_cache(
-            args.cache_dir.as_ref(),
+        let provider_config = args.provider.clone().into_provider().await?;
+        if provider_config.chain_id != CHAIN_ID_ETH_MAINNET {
+            eyre::bail!("unknown chain ID: {}", provider_config.chain_id);
+        }
+        load_stateless_input(
+            &provider_config,
+            &args.cache_dir,
             provider_config.chain_id,
             block_number,
-        )?;
-
-        match (stateless_input_from_cache, provider_config.rpc_url) {
-            (Some(stateless_input_from_cache), _) => stateless_input_from_cache,
-            (None, Some(rpc_url)) => {
-                // Cache not found but we have RPC
-                // Setup the provider.
-                let client =
-                    RpcClient::builder().layer(RetryBackoffLayer::new(5, 1000, 100)).http(rpc_url);
-                let provider = RootProvider::new(client);
-
-                // Setup the host executor.
-                let rpc_executor = RpcExecutor::new(provider, args.preimage_cache_nibbles);
-
-                // Execute the host.
-                let stateless_input =
-                    rpc_executor.execute(block_number).await.expect("failed to execute host");
-
-                if let Some(cache_dir) = args.cache_dir {
-                    let input_folder =
-                        cache_dir.join(format!("input/{}", provider_config.chain_id));
-                    if !input_folder.exists() {
-                        std::fs::create_dir_all(&input_folder)?;
-                    }
-
-                    let input_path = input_folder.join(format!("{}.bin", block_number));
-                    let mut cache_file = std::fs::File::create(input_path)?;
-
-                    bincode::serde::encode_into_std_write(
-                        &stateless_input,
-                        &mut cache_file,
-                        bincode::config::standard(),
-                    )?;
-                }
-
-                stateless_input
-            }
-            (None, None) => {
-                eyre::bail!("cache not found and RPC URL not provided")
-            }
-        }
+            args.preimage_cache_nibbles,
+        )
+        .await?
     };
 
     // MakeInput: encode stateless_input as JSON and write to disk.
@@ -830,7 +715,7 @@ pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) ->
                     println!("BENCH_BLOCK_HASH={block_hash}");
                 }
                 BenchMode::ExecuteMetered => {
-                    let (public_values, segments) =
+                    let (public_values, _segments) =
                         info_span!("sdk.execute_metered", group = program_name)
                             .in_scope(|| sdk.execute_metered(exe, stdin))?;
                     let block_hash = hex::encode(&public_values);
@@ -911,7 +796,17 @@ pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) ->
     Ok(())
 }
 
-fn dump_air_stats(sdk: &Sdk, output_path: &PathBuf) -> eyre::Result<()> {
+/// The SDK we construct at runtime — `PowdrSdkGpu` under `--features=cuda`,
+/// `PowdrSdkCpu` otherwise. Both are `GenericSdk<_, SpecializedConfig…Builder>`
+/// so every non-axiom method we use (`app_keygen`, `agg_pk`, `prover`,
+/// `execute`, `execute_metered`, `app_prover`, `prove`, `evm_prover`) exists
+/// via the underlying `GenericSdk` impls.
+#[cfg(feature = "cuda")]
+type ActiveSdk = PowdrSdkGpu<RiscvISA>;
+#[cfg(not(feature = "cuda"))]
+type ActiveSdk = PowdrSdkCpu<RiscvISA>;
+
+fn dump_air_stats(sdk: &ActiveSdk, output_path: &PathBuf) -> eyre::Result<()> {
     let (app_pk, _app_vk) = sdk.app_keygen();
     let mut file = fs::File::create(output_path)?;
     writeln!(
