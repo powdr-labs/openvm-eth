@@ -4,7 +4,7 @@
 #
 # Options:
 #   --mode <MODE>       Set the proving mode (default: prove-app)
-#                       Valid modes: prove-app, prove-stark, prove-evm, keygen, generate-vm-vkey
+#                       Valid modes: compile, prove-app, prove-stark, prove-evm, keygen, generate-vm-vkey
 #   --generate-vm-vkey  Shortcut for --mode generate-vm-vkey
 #   --profile <PROFILE> Set the Cargo build profile (default: profiling)
 #                       Valid profiles: dev, release, profiling
@@ -12,6 +12,12 @@
 #   --app-l-skip <N>    Log of univariate skip domain size (default: 4)
 #   --cuda              Force CUDA acceleration (auto-detected if nvidia-smi available)
 #   --tco               Use TCO instead of AOT (default is AOT on x86_64)
+#   --apc <N>           Number of autoprecompiles to generate (default: 0 = no APC)
+#   --apc-skip <N>      Skip the first N APC candidates (default: 0)
+#   --pgo-type <KIND>   PGO strategy: cell | instruction | none (default: cell)
+#   --max-segment-height <N> Power-of-two cap on per-chip trace height (APC only)
+#   --leaf-log-stacked-height <N>      Override leaf aggregation log_stacked_height
+#   --internal-log-stacked-height <N>  Override internal recursion log_stacked_height
 #   --perf              Run with perf + samply host profiling and upload to Firefox Profiler
 #   --nsys              Run with nsys profiling and output summary stats
 #   --<tool>            Run with compute-sanitizer --tool <tool> where tool is one of memcheck, synccheck, or racecheck
@@ -152,6 +158,38 @@ while [[ $# -gt 0 ]]; do
             COMPUTE_SANITIZER_ARGS="compute-sanitizer --tool racecheck"
             shift
             ;;
+        --apc)
+            APC="$2"
+            shift 2
+            ;;
+        --apc-skip)
+            APC_SKIP="$2"
+            shift 2
+            ;;
+        --apc-cache-dir)
+            APC_CACHE_DIR="$2"
+            shift 2
+            ;;
+        --apc-setup-name)
+            APC_SETUP_NAME="$2"
+            shift 2
+            ;;
+        --pgo-type)
+            PGO_TYPE="$2"
+            shift 2
+            ;;
+        --max-segment-height)
+            MAX_SEGMENT_HEIGHT="$2"
+            shift 2
+            ;;
+        --leaf-log-stacked-height)
+            LEAF_LOG_STACKED_HEIGHT="$2"
+            shift 2
+            ;;
+        --internal-log-stacked-height)
+            INTERNAL_LOG_STACKED_HEIGHT="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown argument: $1"
             exit 1
@@ -238,8 +276,12 @@ arm64|aarch64)
 x86_64|amd64)
     RUSTFLAGS="-Ctarget-cpu=native"
     if [ "$USE_TCO" = "false" ]; then
-        # aot enables halo2curves-axiom/asm which is x86_64-only
-        FEATURES="$FEATURES,aot"
+        # aot enables halo2curves-axiom/asm which is x86_64-only. Disabled when
+        # `--apc > 0` because powdr's fork of openvm predates the AOT executor
+        # traits and fails to build against an aot-enabled openvm-circuit.
+        if [ -z "${APC:-}" ] || [ "${APC:-0}" = "0" ]; then
+            FEATURES="$FEATURES,aot"
+        fi
         if [ "$MODE" = "prove-evm" ]; then
             FEATURES="$FEATURES,halo2-asm"
         fi
@@ -294,6 +336,31 @@ if [ "$MODE" != "generate-vm-vkey" ]; then
 --block-number $BLOCK_NUMBER \
 --rpc-url $RPC_1 \
 --cache-dir rpc-cache"
+fi
+
+# APC knobs — only forwarded when set. When --apc > 0 (or --mode compile), the
+# binary takes a powdr-specialised path; everything else runs through the
+# vanilla openvm-sdk SDK.
+APC="${APC:-0}"
+APC_SKIP="${APC_SKIP:-0}"
+PGO_TYPE="${PGO_TYPE:-cell}"
+APC_CACHE_DIR="${APC_CACHE_DIR:-$REPO_ROOT/apc-cache}"
+APC_SETUP_NAME="${APC_SETUP_NAME:-reth-apc-${APC}}"
+mkdir -p "$APC_CACHE_DIR"
+BIN_ARGS="$BIN_ARGS \
+--apc $APC \
+--apc-skip $APC_SKIP \
+--pgo-type $PGO_TYPE \
+--apc-cache-dir $APC_CACHE_DIR \
+--apc-setup-name $APC_SETUP_NAME"
+if [[ -n ${MAX_SEGMENT_HEIGHT:-} ]]; then
+    BIN_ARGS="$BIN_ARGS --max-segment-height $MAX_SEGMENT_HEIGHT"
+fi
+if [[ -n ${LEAF_LOG_STACKED_HEIGHT:-} ]]; then
+    BIN_ARGS="$BIN_ARGS --leaf-log-stacked-height $LEAF_LOG_STACKED_HEIGHT"
+fi
+if [[ -n ${INTERNAL_LOG_STACKED_HEIGHT:-} ]]; then
+    BIN_ARGS="$BIN_ARGS --internal-log-stacked-height $INTERNAL_LOG_STACKED_HEIGHT"
 fi
 # TODO: aggregation tree (internal nodes)
 # --num-children-leaf 1 \
