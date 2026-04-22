@@ -75,7 +75,11 @@ default = ["parallel", "jemalloc", "metrics"]
 parallel = ["openvm-sdk/parallel"]
 metrics = ["openvm-sdk/metrics", "powdr-openvm/metrics", "powdr-openvm-riscv/metrics"]
 tco = ["openvm-sdk/tco"]
-aot = ["openvm-sdk/aot"]
+# NOTE: `aot` currently fails to build because powdr-openvm (always in the dep
+# graph) predates axiom's rc.1 `AotExecutor` / `AotMeteredExecutor` supertraits
+# — turning this on will fail to compile until the powdr-labs openvm fork is
+# rebased onto rc.1. `run.sh` does not pass `,aot` into `--features` today.
+aot = ["openvm-sdk/aot", "powdr-openvm/aot", "powdr-openvm-riscv/aot"]
 evm-prove = ["openvm-sdk/evm-prove", "halo2-axiom"]
 evm-verify = ["evm-prove", "openvm-sdk/evm-verify", "halo2-axiom"]
 perf-metrics = ["openvm-sdk/perf-metrics"]

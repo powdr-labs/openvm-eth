@@ -550,15 +550,31 @@ async fn run_apc_path(
         return Ok(());
     }
 
-    if let Some(max) = args.max_segment_height {
-        assert!(
-            max.is_power_of_two(),
-            "--max-segment-height must be a power of two, got {max}",
-        );
-        vm_config.original.config_mut().sdk.system.config.segmentation_config.limits =
-            openvm_circuit::arch::execution_mode::metered::segment_ctx::SegmentationLimits::default()
-                .with_max_trace_height(max);
-        tracing::info!("Capping max segment height at {max}");
+    // Apply the same segmentation / cell-weight knobs that axiom's non-APC path
+    // applies from `BenchmarkCli` (max_segment_length, segment_max_memory,
+    // app_log_blowup). `--max-segment-height` is APC-specific and takes
+    // precedence over `--max-segment-length` when both are set.
+    {
+        let segmentation = &mut vm_config
+            .original
+            .config_mut()
+            .sdk
+            .as_mut()
+            .segmentation_config;
+        if let Some(max) = args.max_segment_height {
+            assert!(
+                max.is_power_of_two(),
+                "--max-segment-height must be a power of two, got {max}",
+            );
+            segmentation.limits.set_max_trace_height(max);
+            tracing::info!("Capping max segment height at {max}");
+        } else if let Some(max_trace_height) = args.benchmark.max_segment_length {
+            segmentation.limits.set_max_trace_height(max_trace_height);
+        }
+        if let Some(max_memory) = args.benchmark.segment_max_memory {
+            segmentation.limits.set_max_memory(max_memory);
+        }
+        segmentation.main_cell_weight = 1 + (1 << args.benchmark.app_log_blowup);
     }
 
     let specialized_app_config =

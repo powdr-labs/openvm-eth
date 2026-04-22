@@ -276,12 +276,13 @@ arm64|aarch64)
 x86_64|amd64)
     RUSTFLAGS="-Ctarget-cpu=native"
     if [ "$USE_TCO" = "false" ]; then
-        # aot enables halo2curves-axiom/asm which is x86_64-only. Disabled when
-        # `--apc > 0` because powdr's fork of openvm predates the AOT executor
-        # traits and fails to build against an aot-enabled openvm-circuit.
-        if [ -z "${APC:-}" ] || [ "${APC:-0}" = "0" ]; then
-            FEATURES="$FEATURES,aot"
-        fi
+        # NOTE: `aot` is currently NOT enabled, even though it's the axiom
+        # default for x86. Reason: powdr-openvm (always in the dep graph)
+        # predates axiom's rc.1 `AotExecutor` / `AotMeteredExecutor`
+        # supertraits — `cargo build … --features …,aot` fails with
+        # "trait bound SpecializedExecutor: Executor not satisfied" regardless
+        # of whether `--apc` is 0 or >0. Lifting this needs a powdr-labs/openvm
+        # rebase onto rc.1, then restoring `FEATURES="$FEATURES,aot"` here.
         if [ "$MODE" = "prove-evm" ]; then
             FEATURES="$FEATURES,halo2-asm"
         fi
