@@ -340,6 +340,11 @@ PGO_TYPE="${PGO_TYPE:-cell}"
 APC_CACHE_DIR="${APC_CACHE_DIR:-$REPO_ROOT/apc-cache}"
 APC_SETUP_NAME="${APC_SETUP_NAME:-reth-apc-${APC}}"
 mkdir -p "$APC_CACHE_DIR"
+# Default the apc-candidates dump dir so callers (CI, local users) don't have
+# to set it. The bin reads `POWDR_APC_CANDIDATES_DIR` and writes per-block
+# JSON/TXT plus a combined `apc_candidates.json` there.
+export POWDR_APC_CANDIDATES_DIR="${POWDR_APC_CANDIDATES_DIR:-$REPO_ROOT/apcs}"
+mkdir -p "$POWDR_APC_CANDIDATES_DIR"
 BIN_ARGS="$BIN_ARGS \
 --apc $APC \
 --apc-skip $APC_SKIP \
