@@ -11,7 +11,6 @@
 #   --block <N>         Set the block number to prove (default: 23992138)
 #   --app-l-skip <N>    Log of univariate skip domain size (default: 4)
 #   --cuda              Force CUDA acceleration (auto-detected if nvidia-smi available)
-#   --tco               Use TCO instead of AOT (default is AOT on x86_64)
 #   --apc <N>           Number of autoprecompiles to generate (default: 0 = no APC)
 #   --apc-skip <N>      Skip the first N APC candidates (default: 0)
 #   --pgo-type <KIND>   PGO strategy: cell | instruction | none (default: cell)
@@ -66,7 +65,6 @@ PROFILE_OVERRIDE=""
 BLOCK_NUMBER_OVERRIDE=""
 USE_CUDA=false
 CUDA_REASON=""
-USE_TCO=false
 USE_PERF=false
 USE_NSYS=false
 USE_NCU=false
@@ -105,10 +103,6 @@ while [[ $# -gt 0 ]]; do
         --cuda)
             USE_CUDA=true
             CUDA_REASON="requested via --cuda script argument"
-            shift
-            ;;
-        --tco)
-            USE_TCO=true
             shift
             ;;
         --perf)
@@ -242,7 +236,7 @@ case "${PROFILE_OVERRIDE:-release}" in
 esac
 FEATURES="parallel,metrics,jemalloc,unprotected"
 BLOCK_NUMBER="${BLOCK_NUMBER_OVERRIDE:-23992138}"
-# switch to +nightly-2026-01-18 if using tco
+# switch to +nightly-2026-01-18
 TOOLCHAIN="+nightly-2026-01-18" # "+stable"
 BIN_NAME="openvm-reth-benchmark"
 MAX_SEGMENT_LENGTH=$((1 << 22))
@@ -269,23 +263,18 @@ arch=$(uname -m)
 case $arch in
 arm64|aarch64)
     RUSTFLAGS="-Ctarget-cpu=native"
-    if [ "$USE_TCO" = "false" ]; then
-        USE_TCO=true
-    fi
     ;;
 x86_64|amd64)
     RUSTFLAGS="-Ctarget-cpu=native"
-    if [ "$USE_TCO" = "false" ]; then
-        # NOTE: `aot` is currently NOT enabled, even though it's the axiom
-        # default for x86. Reason: powdr-openvm (always in the dep graph)
-        # predates axiom's rc.1 `AotExecutor` / `AotMeteredExecutor`
-        # supertraits — `cargo build … --features …,aot` fails with
-        # "trait bound SpecializedExecutor: Executor not satisfied" regardless
-        # of whether `--apc` is 0 or >0. Lifting this needs a powdr-labs/openvm
-        # rebase onto rc.1, then restoring `FEATURES="$FEATURES,aot"` here.
-        if [ "$MODE" = "prove-evm" ]; then
-            FEATURES="$FEATURES,halo2-asm"
-        fi
+    # NOTE: `aot` is currently NOT enabled, even though it's the axiom
+    # default for x86. Reason: powdr-openvm (always in the dep graph)
+    # predates axiom's rc.1 `AotExecutor` / `AotMeteredExecutor`
+    # supertraits — `cargo build … --features …,aot` fails with
+    # "trait bound SpecializedExecutor: Executor not satisfied" regardless
+    # of whether `--apc` is 0 or >0. Lifting this needs a powdr-labs/openvm
+    # rebase onto rc.1, then restoring `FEATURES="$FEATURES,aot"` here.
+    if [ "$MODE" = "prove-evm" ]; then
+        FEATURES="$FEATURES,halo2-asm"
     fi
     ;;
 *)
@@ -293,9 +282,6 @@ echo "Unsupported architecture: $arch"
 exit 1
 ;;
 esac
-if [ "$USE_TCO" = "true" ]; then
-    FEATURES="$FEATURES,tco"
-fi
 if [ "$USE_PERF" = "true" ]; then
     RUSTFLAGS="$RUSTFLAGS -C force-frame-pointers=yes"
     # Default to profiling profile for host profiling if not overridden
