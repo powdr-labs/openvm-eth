@@ -38,7 +38,13 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 WORKDIR=$REPO_ROOT
 
 cd "$REPO_ROOT/bin/stateless-guest"
-cargo openvm build
+# powdr-riscv-elf can only translate PIE ELFs or ELFs with relocation
+# sections. cargo-openvm v2 doesn't add `--emit-relocs` itself, so the
+# guest ELF lands as plain EXEC and the host panics on load. Forward the
+# flag via RUSTFLAGS for just this invocation; cargo-openvm picks it up
+# in `crates/cli/src/commands/build.rs` and folds it into the encoded
+# rustflags handed to the spawned guest cargo.
+RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=--emit-relocs" cargo openvm build
 mkdir -p ../reth-benchmark/elf
 SRC="target/riscv32im-risc0-zkvm-elf/release/openvm-stateless-guest"
 DEST="../reth-benchmark/elf/openvm-stateless-guest"
