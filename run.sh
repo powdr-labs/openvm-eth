@@ -351,9 +351,6 @@ BIN_ARGS="$BIN_ARGS \
 --pgo-type $PGO_TYPE \
 --apc-cache-dir $APC_CACHE_DIR \
 --apc-setup-name $APC_SETUP_NAME"
-if [[ -n ${MAX_SEGMENT_LENGTH:-} ]]; then
-    BIN_ARGS="$BIN_ARGS --max-segment-length $MAX_SEGMENT_LENGTH"
-fi
 if [[ -n ${LEAF_LOG_STACKED_HEIGHT:-} ]]; then
     BIN_ARGS="$BIN_ARGS --leaf-log-stacked-height $LEAF_LOG_STACKED_HEIGHT"
 fi
