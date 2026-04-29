@@ -208,14 +208,6 @@ pub struct HostArgs {
     #[clap(long, value_parser = parse_pgo_type, default_value = "cell")]
     pub pgo_type: PgoType,
 
-    /// Optional cap on per-chip trace height used by the segmentation
-    /// strategy (power of two). When omitted, OpenVM's default (`2^22`) is
-    /// used. For large APC counts the leaf aggregation layer rejects traces
-    /// bigger than `2^21`; set this to `2^20` so each segment's padded trace
-    /// stays at `2^21`.
-    #[clap(long)]
-    pub max_segment_height: Option<u32>,
-
     /// Override the leaf aggregation layer's `log_stacked_height`. Preset is
     /// 21. APC ≳ 500 needs 22; diverges from the proven-soundness preset.
     #[clap(long)]
@@ -586,29 +578,11 @@ pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) ->
     // produces a `SpecializedConfig` over `vm_config` and an unmodified exe.
     let PrecomputedProverData { program } =
         precompute_prover_data(&args, &vm_config, openvm_client_eth_elf).await?;
-    let CompiledProgram { exe, vm_config: mut specialized_vm_config, .. } = program;
+    let CompiledProgram { exe, vm_config: specialized_vm_config, .. } = program;
 
     if matches!(args.mode, BenchMode::Compile) {
         info!("APC compile finished (cache key: {})", args.apc_setup_name);
         return Ok(());
-    }
-
-    // Post-compile override: `--max-segment-height` wins over
-    // `--max-segment-length` when both are set.
-    if let Some(max) = args.max_segment_height {
-        assert!(
-            max.is_power_of_two(),
-            "--max-segment-height must be a power of two, got {max}"
-        );
-        specialized_vm_config
-            .original
-            .config_mut()
-            .sdk
-            .as_mut()
-            .segmentation_config
-            .limits
-            .set_max_trace_height(max);
-        tracing::info!("Capping max segment height at {max}");
     }
 
     let app_params = app_params_with_100_bits_security(DEFAULT_LOG_STACKED_HEIGHT);

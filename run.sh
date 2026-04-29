@@ -14,7 +14,7 @@
 #   --apc <N>           Number of autoprecompiles to generate (default: 0 = no APC)
 #   --apc-skip <N>      Skip the first N APC candidates (default: 0)
 #   --pgo-type <KIND>   PGO strategy: cell | instruction | none (default: cell)
-#   --max-segment-height <N> Power-of-two cap on per-chip trace height (APC only)
+#   --max-segment-length <N> Power-of-two cap on per-chip trace height (APC only)
 #   --leaf-log-stacked-height <N>      Override leaf aggregation log_stacked_height
 #   --internal-log-stacked-height <N>  Override internal recursion log_stacked_height
 #   --perf              Run with perf + samply host profiling and upload to Firefox Profiler
@@ -178,8 +178,8 @@ while [[ $# -gt 0 ]]; do
             PGO_TYPE="$2"
             shift 2
             ;;
-        --max-segment-height)
-            MAX_SEGMENT_HEIGHT="$2"
+        --max-segment-length)
+            MAX_SEGMENT_LENGTH="$2"
             shift 2
             ;;
         --leaf-log-stacked-height)
@@ -351,8 +351,8 @@ BIN_ARGS="$BIN_ARGS \
 --pgo-type $PGO_TYPE \
 --apc-cache-dir $APC_CACHE_DIR \
 --apc-setup-name $APC_SETUP_NAME"
-if [[ -n ${MAX_SEGMENT_HEIGHT:-} ]]; then
-    BIN_ARGS="$BIN_ARGS --max-segment-height $MAX_SEGMENT_HEIGHT"
+if [[ -n ${MAX_SEGMENT_LENGTH:-} ]]; then
+    BIN_ARGS="$BIN_ARGS --max-segment-length $MAX_SEGMENT_LENGTH"
 fi
 if [[ -n ${LEAF_LOG_STACKED_HEIGHT:-} ]]; then
     BIN_ARGS="$BIN_ARGS --leaf-log-stacked-height $LEAF_LOG_STACKED_HEIGHT"
