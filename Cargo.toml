@@ -122,15 +122,15 @@ openvm-p256 = { git = "https://github.com/openvm-org/openvm.git", package = "p25
 openvm-kzg = { git = "https://github.com/axiom-crypto/openvm-kzg.git", branch = "develop-v2.0.0-rc.1", default-features = false }
 openvm-stark-sdk = { git = "https://github.com/openvm-org/stark-backend.git", branch = "develop-v2", default-features = false }
 
-# powdr APC toolchain — tracks the openvm-v2 integration branch on powdr-labs/powdr.
-# The transitive openvm-org deps these pull in are redirected via the `[patch]`
-# sections at the bottom of this file to the powdr-labs forks at `v2-powdr-beta.2`.
-powdr-autoprecompiles = { git = "https://github.com/powdr-labs/powdr.git", branch = "openvm-v2-integration-beta.2", default-features = false }
-powdr-number = { git = "https://github.com/powdr-labs/powdr.git", branch = "openvm-v2-integration-beta.2", default-features = false }
-powdr-openvm = { git = "https://github.com/powdr-labs/powdr.git", branch = "openvm-v2-integration-beta.2", default-features = false }
-powdr-openvm-riscv = { git = "https://github.com/powdr-labs/powdr.git", branch = "openvm-v2-integration-beta.2", default-features = false }
-powdr-openvm-riscv-hints-circuit = { git = "https://github.com/powdr-labs/powdr.git", branch = "openvm-v2-integration-beta.2", default-features = false }
-powdr-riscv-elf = { git = "https://github.com/powdr-labs/powdr.git", branch = "openvm-v2-integration-beta.2", default-features = false }
+# powdr APC toolchain — tracks powdr main. Transitive openvm-org deps pulled
+# in by these crates are redirected via the `[patch]` sections at the bottom
+# of this file to the powdr-labs forks at `v2-powdr-beta.2`.
+powdr-autoprecompiles = { git = "https://github.com/powdr-labs/powdr.git", branch = "main", default-features = false }
+powdr-number = { git = "https://github.com/powdr-labs/powdr.git", branch = "main", default-features = false }
+powdr-openvm = { git = "https://github.com/powdr-labs/powdr.git", branch = "main", default-features = false }
+powdr-openvm-riscv = { git = "https://github.com/powdr-labs/powdr.git", branch = "main", default-features = false }
+powdr-openvm-riscv-hints-circuit = { git = "https://github.com/powdr-labs/powdr.git", branch = "main", default-features = false }
+powdr-riscv-elf = { git = "https://github.com/powdr-labs/powdr.git", branch = "main", default-features = false }
 
 [workspace.lints]
 rust.missing_debug_implementations = "warn"
