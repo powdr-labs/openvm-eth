@@ -647,7 +647,7 @@ pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) ->
     let stateless_input = if let Some(path) = args.input_path.as_ref() {
         try_load_input_from_path(path)?
     } else {
-        let provider_config = args.provider.clone().into_provider().await?;
+        let provider_config = args.provider.into_provider().await?;
         if provider_config.chain_id != CHAIN_ID_ETH_MAINNET {
             eyre::bail!("unknown chain ID: {}", provider_config.chain_id);
         }
@@ -798,9 +798,9 @@ pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) ->
 
 /// The SDK we construct at runtime — `PowdrSdkGpu` under `--features=cuda`,
 /// `PowdrSdkCpu` otherwise. Both are `GenericSdk<_, SpecializedConfig…Builder>`
-/// so every non-axiom method we use (`app_keygen`, `agg_pk`, `prover`,
-/// `execute`, `execute_metered`, `app_prover`, `prove`, `evm_prover`) exists
-/// via the underlying `GenericSdk` impls.
+/// so the SDK methods we use (`app_keygen`, `agg_pk`, `prover`, `execute`,
+/// `execute_metered`, `app_prover`, `prove`, `evm_prover`) all resolve via
+/// the underlying `GenericSdk` impls.
 #[cfg(feature = "cuda")]
 type ActiveSdk = PowdrSdkGpu<RiscvISA>;
 #[cfg(not(feature = "cuda"))]
