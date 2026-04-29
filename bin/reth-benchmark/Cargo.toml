@@ -22,11 +22,13 @@ clap_builder = "4.5.34"
 bincode = { workspace = true, features = ["std"] }
 bitcode.workspace = true
 hex = "0.4.3"
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 eyre.workspace = true
 tokio.workspace = true
 zstd.workspace = true
 toml.workspace = true
+rmp-serde = "1.3"
 
 # workspace
 openvm-stateless-executor.workspace = true
@@ -54,6 +56,14 @@ openvm-verify-stark-host = { git = "https://github.com/openvm-org/openvm.git", b
 openvm-sdk = { git = "https://github.com/openvm-org/openvm.git", branch = "develop-v2.0.0-rc.1", default-features = false }
 openvm-sdk-config = { git = "https://github.com/openvm-org/openvm.git", branch = "develop-v2.0.0-rc.1", default-features = false }
 
+# powdr (APC toolchain). `openvm-*` transitive deps are redirected to the
+# powdr-labs forks via [patch] entries in the workspace Cargo.toml.
+powdr-autoprecompiles.workspace = true
+powdr-openvm.workspace = true
+powdr-openvm-riscv.workspace = true
+powdr-openvm-riscv-hints-circuit.workspace = true
+powdr-riscv-elf.workspace = true
+
 # halo2
 halo2-axiom = { version = "0.5.0", default-features = false, optional = true }
 
@@ -63,9 +73,13 @@ ignored = ["halo2-axiom"]
 [features]
 default = ["parallel", "jemalloc", "metrics"]
 parallel = ["openvm-sdk/parallel"]
-metrics = ["openvm-sdk/metrics"]
+metrics = ["openvm-sdk/metrics", "powdr-openvm/metrics", "powdr-openvm-riscv/metrics"]
 tco = ["openvm-sdk/tco"]
-aot = ["openvm-sdk/aot"]
+# NOTE: `aot` currently fails to build because powdr-openvm (always in the dep
+# graph) predates axiom's rc.1 `AotExecutor` / `AotMeteredExecutor` supertraits
+# — turning this on will fail to compile until the powdr-labs openvm fork is
+# rebased onto rc.1. `run.sh` does not pass `,aot` into `--features` today.
+aot = ["openvm-sdk/aot", "powdr-openvm/aot", "powdr-openvm-riscv/aot"]
 evm-prove = ["openvm-sdk/evm-prove", "halo2-axiom"]
 evm-verify = ["evm-prove", "openvm-sdk/evm-verify", "halo2-axiom"]
 perf-metrics = ["openvm-sdk/perf-metrics"]
@@ -73,6 +87,6 @@ mimalloc = ["openvm-sdk/mimalloc"]
 jemalloc = ["openvm-sdk/jemalloc"]
 # x86 only:
 halo2-asm = ["halo2-axiom?/asm"]
-cuda = ["dep:openvm-cuda-backend", "openvm-sdk/cuda"]
+cuda = ["dep:openvm-cuda-backend", "openvm-sdk/cuda", "powdr-openvm/cuda", "powdr-openvm-riscv/cuda"]
 unprotected = ["openvm-sdk/unprotected"]
 nvtx = ["openvm-stark-sdk/nvtx"]

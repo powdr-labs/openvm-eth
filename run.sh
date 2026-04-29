@@ -4,14 +4,19 @@
 #
 # Options:
 #   --mode <MODE>       Set the proving mode (default: prove-app)
-#                       Valid modes: prove-app, prove-stark, prove-evm, keygen, generate-vm-vkey
+#                       Valid modes: compile, prove-app, prove-stark, prove-evm, keygen, generate-vm-vkey
 #   --generate-vm-vkey  Shortcut for --mode generate-vm-vkey
 #   --profile <PROFILE> Set the Cargo build profile (default: profiling)
 #                       Valid profiles: dev, release, profiling
 #   --block <N>         Set the block number to prove (default: 23992138)
 #   --app-l-skip <N>    Log of univariate skip domain size (default: 4)
 #   --cuda              Force CUDA acceleration (auto-detected if nvidia-smi available)
-#   --tco               Use TCO instead of AOT (default is AOT on x86_64)
+#   --apc <N>           Number of autoprecompiles to generate (default: 0 = no APC)
+#   --apc-skip <N>      Skip the first N APC candidates (default: 0)
+#   --pgo-type <KIND>   PGO strategy: cell | instruction | none (default: cell)
+#   --max-segment-length <N> Power-of-two cap on per-chip trace height (APC only)
+#   --leaf-log-stacked-height <N>      Override leaf aggregation log_stacked_height
+#   --internal-log-stacked-height <N>  Override internal recursion log_stacked_height
 #   --perf              Run with perf + samply host profiling and upload to Firefox Profiler
 #   --nsys              Run with nsys profiling and output summary stats
 #   --<tool>            Run with compute-sanitizer --tool <tool> where tool is one of memcheck, synccheck, or racecheck
@@ -33,7 +38,13 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 WORKDIR=$REPO_ROOT
 
 cd "$REPO_ROOT/bin/stateless-guest"
-cargo openvm build
+# powdr-riscv-elf can only translate PIE ELFs or ELFs with relocation
+# sections. cargo-openvm v2 doesn't add `--emit-relocs` itself, so the
+# guest ELF lands as plain EXEC and the host panics on load. Forward the
+# flag via RUSTFLAGS for just this invocation; cargo-openvm picks it up
+# in `crates/cli/src/commands/build.rs` and folds it into the encoded
+# rustflags handed to the spawned guest cargo.
+RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=--emit-relocs" cargo openvm build
 mkdir -p ../reth-benchmark/elf
 SRC="target/riscv32im-risc0-zkvm-elf/release/openvm-stateless-guest"
 DEST="../reth-benchmark/elf/openvm-stateless-guest"
@@ -60,7 +71,6 @@ PROFILE_OVERRIDE=""
 BLOCK_NUMBER_OVERRIDE=""
 USE_CUDA=false
 CUDA_REASON=""
-USE_TCO=false
 USE_PERF=false
 USE_NSYS=false
 USE_NCU=false
@@ -99,10 +109,6 @@ while [[ $# -gt 0 ]]; do
         --cuda)
             USE_CUDA=true
             CUDA_REASON="requested via --cuda script argument"
-            shift
-            ;;
-        --tco)
-            USE_TCO=true
             shift
             ;;
         --perf)
@@ -151,6 +157,38 @@ while [[ $# -gt 0 ]]; do
         --racecheck)
             COMPUTE_SANITIZER_ARGS="compute-sanitizer --tool racecheck"
             shift
+            ;;
+        --apc)
+            APC="$2"
+            shift 2
+            ;;
+        --apc-skip)
+            APC_SKIP="$2"
+            shift 2
+            ;;
+        --apc-cache-dir)
+            APC_CACHE_DIR="$2"
+            shift 2
+            ;;
+        --apc-setup-name)
+            APC_SETUP_NAME="$2"
+            shift 2
+            ;;
+        --pgo-type)
+            PGO_TYPE="$2"
+            shift 2
+            ;;
+        --max-segment-length)
+            MAX_SEGMENT_LENGTH="$2"
+            shift 2
+            ;;
+        --leaf-log-stacked-height)
+            LEAF_LOG_STACKED_HEIGHT="$2"
+            shift 2
+            ;;
+        --internal-log-stacked-height)
+            INTERNAL_LOG_STACKED_HEIGHT="$2"
+            shift 2
             ;;
         *)
             echo "Unknown argument: $1"
@@ -204,7 +242,7 @@ case "${PROFILE_OVERRIDE:-release}" in
 esac
 FEATURES="parallel,metrics,jemalloc,unprotected"
 BLOCK_NUMBER="${BLOCK_NUMBER_OVERRIDE:-23992138}"
-# switch to +nightly-2026-01-18 if using tco
+# switch to +nightly-2026-01-18
 TOOLCHAIN="+nightly-2026-01-18" # "+stable"
 BIN_NAME="openvm-reth-benchmark"
 MAX_SEGMENT_LENGTH=$((1 << 22))
@@ -231,18 +269,18 @@ arch=$(uname -m)
 case $arch in
 arm64|aarch64)
     RUSTFLAGS="-Ctarget-cpu=native"
-    if [ "$USE_TCO" = "false" ]; then
-        USE_TCO=true
-    fi
     ;;
 x86_64|amd64)
     RUSTFLAGS="-Ctarget-cpu=native"
-    if [ "$USE_TCO" = "false" ]; then
-        # aot enables halo2curves-axiom/asm which is x86_64-only
-        FEATURES="$FEATURES,aot"
-        if [ "$MODE" = "prove-evm" ]; then
-            FEATURES="$FEATURES,halo2-asm"
-        fi
+    # NOTE: `aot` is currently NOT enabled, even though it's the axiom
+    # default for x86. Reason: powdr-openvm (always in the dep graph)
+    # predates axiom's rc.1 `AotExecutor` / `AotMeteredExecutor`
+    # supertraits — `cargo build … --features …,aot` fails with
+    # "trait bound SpecializedExecutor: Executor not satisfied" regardless
+    # of whether `--apc` is 0 or >0. Lifting this needs a powdr-labs/openvm
+    # rebase onto rc.1, then restoring `FEATURES="$FEATURES,aot"` here.
+    if [ "$MODE" = "prove-evm" ]; then
+        FEATURES="$FEATURES,halo2-asm"
     fi
     ;;
 *)
@@ -250,9 +288,6 @@ echo "Unsupported architecture: $arch"
 exit 1
 ;;
 esac
-if [ "$USE_TCO" = "true" ]; then
-    FEATURES="$FEATURES,tco"
-fi
 if [ "$USE_PERF" = "true" ]; then
     RUSTFLAGS="$RUSTFLAGS -C force-frame-pointers=yes"
     # Default to profiling profile for host profiling if not overridden
@@ -294,6 +329,36 @@ if [ "$MODE" != "generate-vm-vkey" ]; then
 --block-number $BLOCK_NUMBER \
 --rpc-url $RPC_1 \
 --cache-dir rpc-cache"
+fi
+
+# APC knobs — only forwarded when set. When --apc > 0 (or --mode compile), the
+# binary takes a powdr-specialised path; everything else runs through the
+# vanilla openvm-sdk SDK.
+APC="${APC:-0}"
+APC_SKIP="${APC_SKIP:-0}"
+PGO_TYPE="${PGO_TYPE:-cell}"
+APC_CACHE_DIR="${APC_CACHE_DIR:-$REPO_ROOT/apc-cache}"
+APC_SETUP_NAME="${APC_SETUP_NAME:-reth-apc-${APC}}"
+mkdir -p "$APC_CACHE_DIR"
+# Default the apc-candidates dump dir so callers (CI, local users) don't have
+# to set it. The bin reads `POWDR_APC_CANDIDATES_DIR` and writes per-block
+# JSON/TXT plus a combined `apc_candidates.json` there.
+export POWDR_APC_CANDIDATES_DIR="${POWDR_APC_CANDIDATES_DIR:-$REPO_ROOT/apcs}"
+mkdir -p "$POWDR_APC_CANDIDATES_DIR"
+BIN_ARGS="$BIN_ARGS \
+--apc $APC \
+--apc-skip $APC_SKIP \
+--pgo-type $PGO_TYPE \
+--apc-cache-dir $APC_CACHE_DIR \
+--apc-setup-name $APC_SETUP_NAME"
+if [[ -n ${MAX_SEGMENT_LENGTH:-} ]]; then
+    BIN_ARGS="$BIN_ARGS --max-segment-length $MAX_SEGMENT_LENGTH"
+fi
+if [[ -n ${LEAF_LOG_STACKED_HEIGHT:-} ]]; then
+    BIN_ARGS="$BIN_ARGS --leaf-log-stacked-height $LEAF_LOG_STACKED_HEIGHT"
+fi
+if [[ -n ${INTERNAL_LOG_STACKED_HEIGHT:-} ]]; then
+    BIN_ARGS="$BIN_ARGS --internal-log-stacked-height $INTERNAL_LOG_STACKED_HEIGHT"
 fi
 # TODO: aggregation tree (internal nodes)
 # --num-children-leaf 1 \
