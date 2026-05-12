@@ -8,5 +8,7 @@ const OPENVM_STATELESS_GUEST_ELF: &[u8] = include_bytes!("../elf/openvm-stateles
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let args = HostArgs::parse();
-    run_reth_benchmark(args, OPENVM_STATELESS_GUEST_ELF).await
+    let optimized_elf = powdr_elf_optimizer::optimize_elf(OPENVM_STATELESS_GUEST_ELF);
+    // run_reth_benchmark(args, OPENVM_STATELESS_GUEST_ELF).await
+    run_reth_benchmark(args, &optimized_elf).await
 }

@@ -75,6 +75,7 @@ USE_PERF=false
 USE_NSYS=false
 USE_NCU=false
 COMPUTE_SANITIZER_ARGS=""
+ADDITIONAL_FEATURES=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -190,6 +191,10 @@ while [[ $# -gt 0 ]]; do
             INTERNAL_LOG_STACKED_HEIGHT="$2"
             shift 2
             ;;
+        --features)
+            ADDITIONAL_FEATURES="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown argument: $1"
             exit 1
@@ -264,6 +269,7 @@ fi
 if [ "$MODE" = "prove-evm" ]; then
     FEATURES="$FEATURES,evm-verify"
 fi
+FEATURES="$FEATURES${ADDITIONAL_FEATURES:+,$ADDITIONAL_FEATURES}"
 
 arch=$(uname -m)
 case $arch in
@@ -362,6 +368,7 @@ fi
 # --num-children-internal 3
 
 export RUST_LOG="info,p3_=warn"
+export GUEST_SYMBOLS_PATH="${GUEST_SYMBOLS_PATH:-$REPO_ROOT/guest_symbols.bin}"
 
 if [ "$USE_PERF" = "true" ]; then
     # Set sampling frequency based on mode
