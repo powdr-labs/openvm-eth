@@ -11,6 +11,7 @@ use alloy_provider::RootProvider;
 use alloy_rpc_client::RpcClient;
 use alloy_transport::layers::RetryBackoffLayer;
 use clap::Parser;
+use openvm::platform::print;
 use openvm_circuit::arch::*;
 use openvm_rpc_proxy::{RpcExecutor, DEFAULT_PREIMAGE_CACHE_NIBBLES};
 use openvm_sdk::{
@@ -48,14 +49,15 @@ use openvm_verify_stark_host::{
 use powdr_autoprecompiles::{
     empirical_constraints::EmpiricalConstraints, execution_profile::execution_profile, PgoType,
 };
-use powdr_openvm::{
-    default_powdr_openvm_config, extraction_utils::OriginalVmConfig, BabyBearOpenVmApcAdapter,
-    CompiledProgram, OriginalCompiledProgram, PowdrExecutionProfileSdkCpu, Prog,
-};
 #[cfg(not(feature = "cuda"))]
 use powdr_openvm::PowdrSdkCpu;
 #[cfg(feature = "cuda")]
 use powdr_openvm::PowdrSdkGpu;
+use powdr_openvm::{
+    default_powdr_openvm_config, extraction_utils::OriginalVmConfig, BabyBearOpenVmApcAdapter,
+    CompiledProgram, OriginalCompiledProgram, PowdrExecutionProfileSdkCpu, Prog,
+    flamechart_from_guest,
+};
 use powdr_openvm_riscv::{compile_exe, ExtendedVmConfig, PgoConfig, RiscvISA};
 use powdr_openvm_riscv_hints_circuit::HintsExtension;
 use serde::{Deserialize, Serialize};
@@ -93,6 +95,8 @@ pub enum BenchMode {
     GenerateVmVkey,
     /// Dump per-AIR statistics and exit.
     DumpAirStats,
+    /// Profile the guest execution and write a folded-stacks flame chart.
+    Profile,
 }
 
 impl std::fmt::Display for BenchMode {
@@ -110,6 +114,7 @@ impl std::fmt::Display for BenchMode {
             Self::Keygen => write!(f, "keygen"),
             Self::GenerateVmVkey => write!(f, "generate_vm_vkey"),
             Self::DumpAirStats => write!(f, "dump_air_stats"),
+            Self::Profile => write!(f, "profile"),
         }
     }
 }
@@ -352,13 +357,11 @@ pub async fn precompute_prover_data(
     // OpenVM only installs its tracing subscriber when `run_with_metric_collection`
     // is entered, so we install a local one here to surface powdr's APC compile
     // progress logs.
-    let subscriber = tracing_subscriber::FmtSubscriber::builder()
-        .with_max_level(tracing::Level::DEBUG)
-        .finish();
+    let subscriber =
+        tracing_subscriber::FmtSubscriber::builder().with_max_level(tracing::Level::DEBUG).finish();
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let cache_file_path =
-        args.apc_cache_dir.join(&args.apc_setup_name).with_extension("bin");
+    let cache_file_path = args.apc_cache_dir.join(&args.apc_setup_name).with_extension("bin");
 
     // MessagePack (rmp-serde) instead of bincode because powdr's `CompiledProgram`
     // pulls in dynamically-typed serde bits that bincode2 errors on
@@ -678,6 +681,11 @@ pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) ->
 
     let stdin = vec![encoded_stateless_input].into();
 
+    println!("14");
+
+    // Capture raw ELF bytes for modes that need to re-build the original exe.
+    let elf_bytes = openvm_client_eth_elf.to_vec();
+
     run_with_metric_collection("OUTPUT_PATH", move || {
         info_span!("reth-block", block_number = block_number).in_scope(|| -> eyre::Result<()> {
             match args.mode {
@@ -758,8 +766,94 @@ pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) ->
                     info!("  App VK: {}", app_vk_path.display());
                     info!("  Agg PK: {}", agg_pk_path.display());
                 }
+                BenchMode::Profile => {
+                    use std::collections::BTreeMap;
+
+                    let sample_rate: u64 = std::env::var("FLAMECHART_SAMPLE_RATE")
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(10_000);
+                    let output_path = std::env::var("FLAMECHART_OUTPUT")
+                        .unwrap_or_else(|_| "profile.folded".to_string());
+
+                    // Re-build the original (pre-APC) exe from the raw ELF bytes.
+                    let profile_params =
+                        app_params_with_100_bits_security(DEFAULT_LOG_STACKED_HEIGHT);
+                    let profile_app_config = AppConfig::new(vm_config.clone(), profile_params);
+                    let profile_sdk = PowdrExecutionProfileSdkCpu::<RiscvISA>::new(
+                        profile_app_config,
+                        AggregationSystemParams::default(),
+                    )?;
+                    // Apply the ELF optimizer so the profiler runs against the same
+                    // instructions as the actual benchmark, and so that optimizer-
+                    // generated routines appear in the symbol table.
+                    let optimized_elf_bytes = powdr_elf_optimizer::optimize_elf(&elf_bytes);
+                    let orig_elf = Elf::decode(&optimized_elf_bytes, MEM_SIZE as u32)?;
+                    let orig_exe = profile_sdk.convert_to_exe(orig_elf)?;
+
+                    // Build function name lookup from the ELF symbol table.
+                    // Filter to addresses within the RISC-V program text range
+                    // (>= 0x200000) to exclude placeholder/debug symbols at
+                    // address 0 that would otherwise appear as the root of every
+                    // call stack via the `range(..=pc).next_back()` heuristic.
+                    let elf_prog = powdr_riscv_elf::load_elf_from_buffer(&optimized_elf_bytes);
+                    let entry_pc = elf_prog.entry_point();
+                    let fn_bounds: BTreeMap<u32, String> = elf_prog
+                        .debug_info()
+                        .symbols
+                        .table()
+                        .iter()
+                        .filter(|(addr, _)| **addr >= 0x200000)
+                        .filter_map(|(addr, names): (&u32, &Vec<String>)| {
+                            names.first().map(|n| {
+                                // Demangled Rust names can contain ';' (e.g. array
+                                // types like `[u8; 4usize]`).  The folded-stacks
+                                // format uses ';' as a frame separator, so any
+                                // literal semicolons must be replaced before writing.
+                                // ',' is the natural substitute for array-size syntax.
+                                let demangled =
+                                    rustc_demangle::demangle(n).to_string().replace(';', ",");
+                                (*addr, demangled)
+                            })
+                        })
+                        .collect();
+
+                    // The ELF entry point (_start) is typically a NOTYPE symbol,
+                    // so it is excluded from the STT_FUNC/STT_OBJECT symbol table.
+                    // Insert it explicitly so the call-stack seed in FlamechartCollector
+                    // resolves to "_start" rather than falling back to the nearest
+                    // preceding function (memcpy).
+                    let entry_name = elf_prog
+                        .debug_info()
+                        .symbols
+                        .try_get_one(entry_pc)
+                        .unwrap_or("_start")
+                        .to_string();
+                    let mut fn_bounds = fn_bounds;
+                    fn_bounds.entry(entry_pc).or_insert(entry_name);
+
+                    let orig_program = OriginalCompiledProgram::<RiscvISA>::new(
+                        orig_exe,
+                        OriginalVmConfig::new(vm_config),
+                        elf_prog,
+                    );
+
+                    info!(
+                        "Starting flamechart profiling (sample_rate={sample_rate}), output → {output_path}"
+                    );
+                    let mut output_file = std::fs::File::create(&output_path)?;
+                    flamechart_from_guest(
+                        &orig_program,
+                        stdin,
+                        fn_bounds,
+                        sample_rate,
+                        entry_pc,
+                        &mut output_file,
+                    );
+                    info!("Flamechart profile written to {output_path}");
+                }
                 _ => {
-                    // MakeInput, ExecuteHost, GenerateVmVkey, DumpAirStats handled earlier
+                    // MakeInput, ExecuteHost, GenerateVmVkey, DumpAirStats handled earlier.
                     unreachable!();
                 }
             }

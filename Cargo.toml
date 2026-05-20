@@ -131,6 +131,7 @@ powdr-openvm = { git = "https://github.com/powdr-labs/powdr.git", branch = "main
 powdr-openvm-riscv = { git = "https://github.com/powdr-labs/powdr.git", branch = "main", default-features = false }
 powdr-openvm-riscv-hints-circuit = { git = "https://github.com/powdr-labs/powdr.git", branch = "main", default-features = false }
 powdr-riscv-elf = { git = "https://github.com/powdr-labs/powdr.git", branch = "main", default-features = false }
+powdr-elf-optimizer = { path = "../powdr/elf-optimizer" }
 
 [workspace.lints]
 rust.missing_debug_implementations = "warn"
@@ -213,3 +214,12 @@ openvm-cuda-backend = { git = "https://github.com/powdr-labs/stark-backend.git",
 openvm-cuda-common = { git = "https://github.com/powdr-labs/stark-backend.git", tag = "v2.0.0-beta.2-powdr" }
 openvm-stark-backend = { git = "https://github.com/powdr-labs/stark-backend.git", tag = "v2.0.0-beta.2-powdr" }
 openvm-stark-sdk = { git = "https://github.com/powdr-labs/stark-backend.git", tag = "v2.0.0-beta.2-powdr" }
+
+
+[patch."https://github.com/powdr-labs/powdr.git"]                                                                                                                       
+powdr-openvm-riscv = { path = "../powdr/openvm-riscv" }
+powdr-openvm = { path = "../powdr/openvm" }
+powdr-riscv-elf = { path = "../powdr/riscv-elf" }
+powdr-number = { path = "../powdr/number" }
+powdr-autoprecompiles = { path = "../powdr/autoprecompiles" }
+powdr-openvm-riscv-hints-circuit = { path = "../powdr/openvm-riscv/extensions/hints-circuit" }
