@@ -784,7 +784,11 @@ pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) ->
                         profile_app_config,
                         AggregationSystemParams::default(),
                     )?;
-                    let orig_elf = Elf::decode(&elf_bytes, MEM_SIZE as u32)?;
+                    // Apply the ELF optimizer so the profiler runs against the same
+                    // instructions as the actual benchmark, and so that optimizer-
+                    // generated routines appear in the symbol table.
+                    let optimized_elf_bytes = powdr_elf_optimizer::optimize_elf(&elf_bytes);
+                    let orig_elf = Elf::decode(&optimized_elf_bytes, MEM_SIZE as u32)?;
                     let orig_exe = profile_sdk.convert_to_exe(orig_elf)?;
 
                     // Build function name lookup from the ELF symbol table.
@@ -792,7 +796,7 @@ pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) ->
                     // (>= 0x200000) to exclude placeholder/debug symbols at
                     // address 0 that would otherwise appear as the root of every
                     // call stack via the `range(..=pc).next_back()` heuristic.
-                    let elf_prog = powdr_riscv_elf::load_elf_from_buffer(&elf_bytes);
+                    let elf_prog = powdr_riscv_elf::load_elf_from_buffer(&optimized_elf_bytes);
                     let entry_pc = elf_prog.entry_point();
                     let fn_bounds: BTreeMap<u32, String> = elf_prog
                         .debug_info()
@@ -802,8 +806,13 @@ pub async fn run_reth_benchmark(args: HostArgs, openvm_client_eth_elf: &[u8]) ->
                         .filter(|(addr, _)| **addr >= 0x200000)
                         .filter_map(|(addr, names): (&u32, &Vec<String>)| {
                             names.first().map(|n| {
+                                // Demangled Rust names can contain ';' (e.g. array
+                                // types like `[u8; 4usize]`).  The folded-stacks
+                                // format uses ';' as a frame separator, so any
+                                // literal semicolons must be replaced before writing.
+                                // ',' is the natural substitute for array-size syntax.
                                 let demangled =
-                                    rustc_demangle::demangle(n).to_string();
+                                    rustc_demangle::demangle(n).to_string().replace(';', ",");
                                 (*addr, demangled)
                             })
                         })
