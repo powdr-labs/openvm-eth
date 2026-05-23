@@ -3000,6 +3000,7 @@ dependencies = [
  "openvm-algebra-guest",
  "openvm-ecc-guest",
  "openvm-stateless-executor",
+ "revm-interpreter",
 ]
 
 [[package]]
@@ -4052,8 +4053,6 @@ dependencies = [
 [[package]]
 name = "revm-interpreter"
 version = "32.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11406408597bc249392d39295831c4b641b3a6f5c471a7c41104a7a1e3564c07"
 dependencies = [
  "revm-bytecode",
  "revm-context-interface",

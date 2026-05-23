@@ -213,3 +213,10 @@ openvm-cuda-backend = { git = "https://github.com/powdr-labs/stark-backend.git",
 openvm-cuda-common = { git = "https://github.com/powdr-labs/stark-backend.git", tag = "v2.0.0-beta.2-powdr" }
 openvm-stark-backend = { git = "https://github.com/powdr-labs/stark-backend.git", tag = "v2.0.0-beta.2-powdr" }
 openvm-stark-sdk = { git = "https://github.com/powdr-labs/stark-backend.git", tag = "v2.0.0-beta.2-powdr" }
+
+# Route revm-interpreter through a local vendor that replaces the EVM ADD
+# opcode's wrapping-256-bit-add body with the openvm INT256 custom op
+# (opcode 0x0b, funct3=0b101) on zkvm targets. See
+# `crates/revm-interpreter-patched/src/instructions/arithmetic.rs`.
+[patch.crates-io]
+revm-interpreter = { path = "crates/revm-interpreter-patched" }
