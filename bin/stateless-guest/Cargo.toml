@@ -16,10 +16,6 @@ openvm = { git = "https://github.com/openvm-org/openvm.git", branch = "develop-v
 openvm-algebra-guest = { git = "https://github.com/openvm-org/openvm.git", branch = "develop-v2.0.0-rc.1", optional = true }
 openvm-ecc-guest = { git = "https://github.com/openvm-org/openvm.git", branch = "develop-v2.0.0-rc.1", optional = true }
 
-# Direct dep on revm-interpreter so the patched fork's `evm-jit` / `evm-aot`
-# feature can be selected by this guest. Toggle the `features` list below.
-revm-interpreter = { version = "32.0.0", default-features = false, features = ["std", "evm-bb-aot"] }
-
 # Enable std feature for host builds (provides critical-section implementation)
 [target.'cfg(not(target_os = "zkvm"))'.dependencies]
 openvm-stateless-executor = { path = "../../crates/stateless-executor", default-features = false, features = ["std"] }

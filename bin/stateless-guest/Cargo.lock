@@ -3000,7 +3000,6 @@ dependencies = [
  "openvm-algebra-guest",
  "openvm-ecc-guest",
  "openvm-stateless-executor",
- "revm-interpreter",
 ]
 
 [[package]]

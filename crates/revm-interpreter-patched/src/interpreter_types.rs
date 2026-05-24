@@ -77,31 +77,6 @@ pub trait Jumps {
     fn pc(&self) -> usize;
     /// Returns instruction opcode.
     fn opcode(&self) -> u8;
-
-    /// Returns the keccak256 hash of the currently-executing bytecode.
-    /// Used by the AOT basic-block dispatch table to key per-contract entries.
-    fn bytecode_hash_bytes(&mut self) -> [u8; 32];
-
-    /// Returns `0` if there is no AOT entry at the current pc, otherwise
-    /// `1 + idx` where `idx` is the index into [`crate::aot_table::AOT_TABLE`].
-    /// On builds without `evm-aot` enabled, always returns `0`.
-    fn aot_table_idx(&mut self) -> u16;
-
-    /// Returns `0` if there is no BB-walker entry at the current pc,
-    /// otherwise `1 + idx` into [`crate::bb_walker_table::BB_WALKER_TABLE`].
-    /// On builds without `evm-bb-aot` enabled, always returns `0`.
-    fn bb_walker_idx(&mut self) -> u32;
-
-    /// Returns and clears the `pending_bb_check` flag. step() uses this to
-    /// gate the AOT-dispatch lookup to BB boundaries only.
-    fn take_pending_bb_check(&mut self) -> bool;
-    /// Set the `pending_bb_check` flag. Called by JUMPI / JUMP handlers and
-    /// at frame entry. No-op on builds without `evm-bb-aot`.
-    fn set_pending_bb_check(&mut self);
-    /// True iff this contract has at least one AOT BB entry. The JUMPDEST
-    /// and JUMPI hooks use this to early-return for non-AOT contracts.
-    /// On builds without `evm-bb-aot` enabled, always returns `false`.
-    fn aot_present(&self) -> bool;
 }
 
 /// Trait for Interpreter memory operations.
@@ -167,6 +142,17 @@ pub trait MemoryTr {
         self.slice(offset..offset + len)
     }
 
+    /// Returns a raw mutable pointer to the `len` bytes of memory starting at
+    /// `offset`. Default impl panics — concrete implementations should
+    /// override for callers that need direct memory writes (e.g., MSTORE asm).
+    ///
+    /// # Safety
+    /// Caller must ensure the range is within allocated memory (use
+    /// [`resize`][MemoryTr::resize] first).
+    unsafe fn raw_mut_ptr(&mut self, _offset: usize, _len: usize) -> *mut u8 {
+        unimplemented!("raw_mut_ptr not supported on this MemoryTr implementation")
+    }
+
     /// Resizes memory to new size
     ///
     /// # Note
@@ -229,38 +215,6 @@ pub trait StackTr {
     #[must_use]
     fn popn_top<const POPN: usize>(&mut self) -> Option<([U256; POPN], &mut U256)>;
 
-    /// Returns raw pointers to the top two stack elements (stack[len-2], stack[len-1])
-    /// without modifying the stack, plus the current length. Used by hand-rolled
-    /// transpiled opcodes that operate directly on stack memory and then call
-    /// [`StackTr::shrink_unchecked`] to pop.
-    ///
-    /// # Safety
-    /// Caller must ensure `len >= 2` before calling.
-    unsafe fn top_pair_ptr_unchecked(&mut self) -> (*mut U256, *mut U256);
-
-    /// Decrements stack length by `n` without dropping the popped elements (`U256`
-    /// is `Copy`/POD so no drop is needed).
-    ///
-    /// # Safety
-    /// Caller must ensure `len >= n` before calling.
-    unsafe fn shrink_unchecked(&mut self, n: usize);
-
-    /// Returns the raw data pointer to `stack[0]`. Used by literal-AOT BB
-    /// handlers to read/write arbitrary stack slots.
-    ///
-    /// # Safety
-    /// The pointer is valid for `0..capacity` (Stack reserves `STACK_LIMIT`).
-    /// Reads beyond `len` are uninit. Writes within `capacity` are sound but
-    /// require a subsequent `set_len_unchecked` if growing.
-    unsafe fn data_ptr_mut(&mut self) -> *mut U256;
-
-    /// Sets the stack length to `new_len` without bounds checking.
-    ///
-    /// # Safety
-    /// `new_len <= STACK_LIMIT`, and all positions `0..new_len` must hold
-    /// initialized `U256` values.
-    unsafe fn set_len_unchecked(&mut self, new_len: usize);
-
     /// Returns top value from the stack.
     #[must_use]
     fn top(&mut self) -> Option<&mut U256> {
@@ -272,6 +226,53 @@ pub trait StackTr {
     fn pop(&mut self) -> Option<U256> {
         self.popn::<1>().map(|[value]| value)
     }
+
+    /// Discards the top of the stack without reading its value.
+    ///
+    /// Allows the POP opcode to skip the 32-byte read-then-drop of the
+    /// returned value. Default impl falls back to [`Self::popn`].
+    #[must_use]
+    fn discard_top(&mut self) -> bool {
+        self.popn::<1>().is_some()
+    }
+
+    /// Returns raw pointers `(dst, src)` to the second-from-top and top stack
+    /// words respectively. Convention matches binary opcodes like ADD/SUB:
+    /// write the result to `dst` in place, then call
+    /// [`Self::shrink_unchecked`] to discard `src`.
+    ///
+    /// # Safety
+    /// Caller must ensure `len() >= 2`.
+    unsafe fn top_pair_ptr_unchecked(&mut self) -> (*mut U256, *mut U256);
+
+    /// Returns raw pointers `(dst, src1, src2)` to the third-from-top,
+    /// second-from-top, and top stack words. Convention for ternary opcodes
+    /// like ADDMOD/MULMOD: write to `dst` in place, then
+    /// [`Self::shrink_unchecked(2)`] to discard both srcs.
+    ///
+    /// # Safety
+    /// Caller must ensure `len() >= 3`.
+    unsafe fn top_triple_ptr_unchecked(&mut self) -> (*mut U256, *mut U256, *mut U256);
+
+    /// Returns a raw pointer to the top stack word.
+    ///
+    /// # Safety
+    /// Caller must ensure `len() >= 1`.
+    unsafe fn top_ptr_unchecked(&mut self) -> *mut U256;
+
+    /// Decrements stack length by `n`. `U256: Copy`, so no drop runs.
+    ///
+    /// # Safety
+    /// Caller must ensure `len() >= n`.
+    unsafe fn shrink_unchecked(&mut self, n: usize);
+
+    /// Increments the stack length by 1 and returns a raw pointer to the
+    /// newly-uninitialised top slot. Caller is responsible for writing all
+    /// 32 bytes before any subsequent stack read.
+    ///
+    /// # Safety
+    /// Caller must ensure `len() < STACK_LIMIT`.
+    unsafe fn push_uninit_unchecked(&mut self) -> *mut U256;
 
     /// Pops address from the stack.
     ///

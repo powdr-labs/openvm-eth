@@ -154,15 +154,6 @@ impl Gas {
         self.remaining = self.remaining.wrapping_sub(cost);
         oog
     }
-
-    /// Adds `amount` back to `remaining`. Used by the AOT JUMPDEST hook to
-    /// undo the 1-gas debit step() already charged before invoking us, so
-    /// the subsequent BB handler can pre-charge the total static gas
-    /// (which includes the JUMPDEST's 1) without double-counting.
-    #[inline]
-    pub fn refund_remaining(&mut self, amount: u64) {
-        self.remaining = self.remaining.saturating_add(amount);
-    }
 }
 
 /// Result of attempting to extend memory during execution.

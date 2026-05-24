@@ -8,68 +8,94 @@ use primitives::U256;
 
 /// Implements the ADD instruction - adds two values from stack.
 pub fn add<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H, WIRE>) {
-    // openvm: transpiled EVM ADD. Reads stack[len-1] and stack[len-2] directly,
-    // does an 8-limb (32-bit) carry-propagating addc chain in place at
-    // stack[len-2], decrements stack length. No popn_top local copy, no
-    // custom opcodes — pure RV32IM that an unmodified RV32IM core would
-    // execute identically. U256 limbs are LE; carry walks offset 0 -> 28.
     #[cfg(target_os = "zkvm")]
-    unsafe {
+    {
         if context.interpreter.stack.len() < 2 {
             context.interpreter.halt_underflow();
             return;
         }
-        let (dst_u256, src_u256) = context.interpreter.stack.top_pair_ptr_unchecked();
-        let d = dst_u256 as *mut u32;
-        let s = src_u256 as *const u32;
-        core::arch::asm!(
-            // limb 0: no incoming carry; t3 holds outgoing carry.
-            "lw   t0, 0({d})",  "lw   t1, 0({s})",
-            "add  t2, t0, t1",  "sltu t3, t2, t0",
-            "sw   t2, 0({d})",
-            // limbs 1..=6: incoming carry in t3, outgoing carry in t3.
-            "lw   t0, 4({d})",  "lw   t1, 4({s})",
-            "add  t2, t0, t1",  "sltu t4, t2, t0",
-            "add  t2, t2, t3",  "sltu t5, t2, t3",
-            "or   t3, t4, t5",  "sw   t2, 4({d})",
-
-            "lw   t0, 8({d})",  "lw   t1, 8({s})",
-            "add  t2, t0, t1",  "sltu t4, t2, t0",
-            "add  t2, t2, t3",  "sltu t5, t2, t3",
-            "or   t3, t4, t5",  "sw   t2, 8({d})",
-
-            "lw   t0, 12({d})", "lw   t1, 12({s})",
-            "add  t2, t0, t1",  "sltu t4, t2, t0",
-            "add  t2, t2, t3",  "sltu t5, t2, t3",
-            "or   t3, t4, t5",  "sw   t2, 12({d})",
-
-            "lw   t0, 16({d})", "lw   t1, 16({s})",
-            "add  t2, t0, t1",  "sltu t4, t2, t0",
-            "add  t2, t2, t3",  "sltu t5, t2, t3",
-            "or   t3, t4, t5",  "sw   t2, 16({d})",
-
-            "lw   t0, 20({d})", "lw   t1, 20({s})",
-            "add  t2, t0, t1",  "sltu t4, t2, t0",
-            "add  t2, t2, t3",  "sltu t5, t2, t3",
-            "or   t3, t4, t5",  "sw   t2, 20({d})",
-
-            "lw   t0, 24({d})", "lw   t1, 24({s})",
-            "add  t2, t0, t1",  "sltu t4, t2, t0",
-            "add  t2, t2, t3",  "sltu t5, t2, t3",
-            "or   t3, t4, t5",  "sw   t2, 24({d})",
-            // limb 7: incoming carry in t3, outgoing carry discarded (wrap).
-            "lw   t0, 28({d})", "lw   t1, 28({s})",
-            "add  t2, t0, t1",
-            "add  t2, t2, t3",
-            "sw   t2, 28({d})",
-
-            d = in(reg) d,
-            s = in(reg) s,
-            out("t0") _, out("t1") _, out("t2") _,
-            out("t3") _, out("t4") _, out("t5") _,
-            options(nostack, preserves_flags),
-        );
-        context.interpreter.stack.shrink_unchecked(1);
+        unsafe {
+            let (dst, src) = context.interpreter.stack.top_pair_ptr_unchecked();
+            let d = dst as *mut u32;
+            let s = src as *const u32;
+            // Hand-rolled 8-limb add-with-carry on RV32IM. d += s.
+            core::arch::asm!(
+                // limb 0 (no carry-in)
+                "lw   {a},  0({d})",
+                "lw   {b},  0({s})",
+                "add  {a}, {a}, {b}",
+                "sw   {a},  0({d})",
+                "sltu {c}, {a}, {b}",
+                // limb 1
+                "lw   {a},  4({d})",
+                "lw   {b},  4({s})",
+                "add  {a}, {a}, {b}",
+                "sltu {t}, {a}, {b}",
+                "add  {a}, {a}, {c}",
+                "sltu {c}, {a}, {c}",
+                "or   {c}, {c}, {t}",
+                "sw   {a},  4({d})",
+                // limb 2
+                "lw   {a},  8({d})",
+                "lw   {b},  8({s})",
+                "add  {a}, {a}, {b}",
+                "sltu {t}, {a}, {b}",
+                "add  {a}, {a}, {c}",
+                "sltu {c}, {a}, {c}",
+                "or   {c}, {c}, {t}",
+                "sw   {a},  8({d})",
+                // limb 3
+                "lw   {a}, 12({d})",
+                "lw   {b}, 12({s})",
+                "add  {a}, {a}, {b}",
+                "sltu {t}, {a}, {b}",
+                "add  {a}, {a}, {c}",
+                "sltu {c}, {a}, {c}",
+                "or   {c}, {c}, {t}",
+                "sw   {a}, 12({d})",
+                // limb 4
+                "lw   {a}, 16({d})",
+                "lw   {b}, 16({s})",
+                "add  {a}, {a}, {b}",
+                "sltu {t}, {a}, {b}",
+                "add  {a}, {a}, {c}",
+                "sltu {c}, {a}, {c}",
+                "or   {c}, {c}, {t}",
+                "sw   {a}, 16({d})",
+                // limb 5
+                "lw   {a}, 20({d})",
+                "lw   {b}, 20({s})",
+                "add  {a}, {a}, {b}",
+                "sltu {t}, {a}, {b}",
+                "add  {a}, {a}, {c}",
+                "sltu {c}, {a}, {c}",
+                "or   {c}, {c}, {t}",
+                "sw   {a}, 20({d})",
+                // limb 6
+                "lw   {a}, 24({d})",
+                "lw   {b}, 24({s})",
+                "add  {a}, {a}, {b}",
+                "sltu {t}, {a}, {b}",
+                "add  {a}, {a}, {c}",
+                "sltu {c}, {a}, {c}",
+                "or   {c}, {c}, {t}",
+                "sw   {a}, 24({d})",
+                // limb 7 (no carry-out needed; result wraps mod 2^256)
+                "lw   {a}, 28({d})",
+                "lw   {b}, 28({s})",
+                "add  {a}, {a}, {b}",
+                "add  {a}, {a}, {c}",
+                "sw   {a}, 28({d})",
+                d = in(reg) d,
+                s = in(reg) s,
+                a = out(reg) _,
+                b = out(reg) _,
+                c = out(reg) _,
+                t = out(reg) _,
+                options(nostack, preserves_flags),
+            );
+            context.interpreter.stack.shrink_unchecked(1);
+        }
     }
     #[cfg(not(target_os = "zkvm"))]
     {
@@ -86,8 +112,103 @@ pub fn mul<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H,
 
 /// Implements the SUB instruction - subtracts two values from stack.
 pub fn sub<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H, WIRE>) {
-    popn_top!([op1], op2, context.interpreter);
-    *op2 = op1.wrapping_sub(*op2);
+    #[cfg(target_os = "zkvm")]
+    {
+        if context.interpreter.stack.len() < 2 {
+            context.interpreter.halt_underflow();
+            return;
+        }
+        unsafe {
+            let (dst, src) = context.interpreter.stack.top_pair_ptr_unchecked();
+            // EVM SUB: result = popped_top - new_top = src - dst (stored into dst).
+            let d = dst as *mut u32;
+            let s = src as *const u32;
+            // Hand-rolled 8-limb sub-with-borrow on RV32IM. d = s - d.
+            core::arch::asm!(
+                // limb 0 (no borrow-in)
+                "lw   {sw},  0({s})",
+                "lw   {dw},  0({d})",
+                "sltu {c}, {sw}, {dw}",
+                "sub  {a}, {sw}, {dw}",
+                "sw   {a},  0({d})",
+                // limb 1
+                "lw   {sw},  4({s})",
+                "lw   {dw},  4({d})",
+                "sltu {t}, {sw}, {dw}",
+                "sub  {a}, {sw}, {dw}",
+                "sltu {u}, {a}, {c}",
+                "sub  {a}, {a}, {c}",
+                "or   {c}, {t}, {u}",
+                "sw   {a},  4({d})",
+                // limb 2
+                "lw   {sw},  8({s})",
+                "lw   {dw},  8({d})",
+                "sltu {t}, {sw}, {dw}",
+                "sub  {a}, {sw}, {dw}",
+                "sltu {u}, {a}, {c}",
+                "sub  {a}, {a}, {c}",
+                "or   {c}, {t}, {u}",
+                "sw   {a},  8({d})",
+                // limb 3
+                "lw   {sw}, 12({s})",
+                "lw   {dw}, 12({d})",
+                "sltu {t}, {sw}, {dw}",
+                "sub  {a}, {sw}, {dw}",
+                "sltu {u}, {a}, {c}",
+                "sub  {a}, {a}, {c}",
+                "or   {c}, {t}, {u}",
+                "sw   {a}, 12({d})",
+                // limb 4
+                "lw   {sw}, 16({s})",
+                "lw   {dw}, 16({d})",
+                "sltu {t}, {sw}, {dw}",
+                "sub  {a}, {sw}, {dw}",
+                "sltu {u}, {a}, {c}",
+                "sub  {a}, {a}, {c}",
+                "or   {c}, {t}, {u}",
+                "sw   {a}, 16({d})",
+                // limb 5
+                "lw   {sw}, 20({s})",
+                "lw   {dw}, 20({d})",
+                "sltu {t}, {sw}, {dw}",
+                "sub  {a}, {sw}, {dw}",
+                "sltu {u}, {a}, {c}",
+                "sub  {a}, {a}, {c}",
+                "or   {c}, {t}, {u}",
+                "sw   {a}, 20({d})",
+                // limb 6
+                "lw   {sw}, 24({s})",
+                "lw   {dw}, 24({d})",
+                "sltu {t}, {sw}, {dw}",
+                "sub  {a}, {sw}, {dw}",
+                "sltu {u}, {a}, {c}",
+                "sub  {a}, {a}, {c}",
+                "or   {c}, {t}, {u}",
+                "sw   {a}, 24({d})",
+                // limb 7 (no borrow-out)
+                "lw   {sw}, 28({s})",
+                "lw   {dw}, 28({d})",
+                "sub  {a}, {sw}, {dw}",
+                "sub  {a}, {a}, {c}",
+                "sw   {a}, 28({d})",
+                d = in(reg) d,
+                s = in(reg) s,
+                a = out(reg) _,
+                sw = out(reg) _,
+                dw = out(reg) _,
+                c = out(reg) _,
+                t = out(reg) _,
+                u = out(reg) _,
+                options(nostack, preserves_flags),
+            );
+            context.interpreter.stack.shrink_unchecked(1);
+        }
+    }
+    #[cfg(not(target_os = "zkvm"))]
+    {
+        popn_top!([op1], op2, context.interpreter);
+        *op2 = op1.wrapping_sub(*op2);
+    }
 }
 
 /// Implements the DIV instruction - divides two values from stack.

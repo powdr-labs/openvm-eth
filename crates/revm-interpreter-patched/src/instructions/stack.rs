@@ -10,8 +10,9 @@ use crate::InstructionContext;
 ///
 /// Removes the top item from the stack.
 pub fn pop<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H, WIRE>) {
-    // Can ignore return. as relative N jump is safe operation.
-    popn!([_i], context.interpreter);
+    if !context.interpreter.stack.discard_top() {
+        context.interpreter.halt_underflow();
+    }
 }
 
 /// EIP-3855: PUSH0 instruction
@@ -28,14 +29,48 @@ pub fn push0<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, 
 pub fn push<const N: usize, WIRE: InterpreterTypes, H: ?Sized>(
     context: InstructionContext<'_, H, WIRE>,
 ) {
-    let slice = context.interpreter.bytecode.read_slice(N);
-    if !context.interpreter.stack.push_slice(slice) {
-        context.interpreter.halt(InstructionResult::StackOverflow);
+    #[cfg(target_os = "zkvm")]
+    {
+        if context.interpreter.stack.len() == crate::interpreter::STACK_LIMIT {
+            context.interpreter.halt(InstructionResult::StackOverflow);
+            return;
+        }
+        unsafe {
+            let src = context.interpreter.bytecode.read_slice(N).as_ptr();
+            let dst = context.interpreter.stack.push_uninit_unchecked() as *mut u32;
+            // Zero all 32 bytes of dst as 8 u32 LE writes.
+            core::ptr::write(dst.add(0), 0);
+            core::ptr::write(dst.add(1), 0);
+            core::ptr::write(dst.add(2), 0);
+            core::ptr::write(dst.add(3), 0);
+            core::ptr::write(dst.add(4), 0);
+            core::ptr::write(dst.add(5), 0);
+            core::ptr::write(dst.add(6), 0);
+            core::ptr::write(dst.add(7), 0);
+            // Reverse-copy N bytes into the LSB end of the U256. LLVM unrolls
+            // the loop because N is const-generic.
+            let dst_bytes = dst as *mut u8;
+            let mut i = 0;
+            while i < N {
+                let b = core::ptr::read(src.add(i));
+                core::ptr::write(dst_bytes.add(N - 1 - i), b);
+                i += 1;
+            }
+        }
+        context.interpreter.bytecode.relative_jump(N as isize);
         return;
     }
+    #[cfg(not(target_os = "zkvm"))]
+    {
+        let slice = context.interpreter.bytecode.read_slice(N);
+        if !context.interpreter.stack.push_slice(slice) {
+            context.interpreter.halt(InstructionResult::StackOverflow);
+            return;
+        }
 
-    // Can ignore return. as relative N jump is safe operation
-    context.interpreter.bytecode.relative_jump(N as isize);
+        // Can ignore return. as relative N jump is safe operation
+        context.interpreter.bytecode.relative_jump(N as isize);
+    }
 }
 
 /// Implements the DUP1-DUP16 instructions.

@@ -89,6 +89,12 @@ impl MemoryTr for SharedMemory {
         self.slice_range(range)
     }
 
+    #[inline]
+    unsafe fn raw_mut_ptr(&mut self, offset: usize, len: usize) -> *mut u8 {
+        let mut slice = self.slice_mut(offset, len);
+        slice.as_mut_ptr()
+    }
+
     fn local_memory_offset(&self) -> usize {
         self.my_checkpoint
     }

@@ -102,10 +102,34 @@ impl StackTr for Stack {
     }
 
     #[inline]
+    fn discard_top(&mut self) -> bool {
+        let len = self.data.len();
+        if primitives::hints_util::unlikely(len == 0) {
+            false
+        } else {
+            unsafe { self.data.set_len(len - 1) };
+            true
+        }
+    }
+
+    #[inline]
     unsafe fn top_pair_ptr_unchecked(&mut self) -> (*mut U256, *mut U256) {
         let len = self.data.len();
-        let p = self.data.as_mut_ptr();
-        (p.add(len - 2), p.add(len - 1))
+        let base = self.data.as_mut_ptr();
+        (base.add(len - 2), base.add(len - 1))
+    }
+
+    #[inline]
+    unsafe fn top_triple_ptr_unchecked(&mut self) -> (*mut U256, *mut U256, *mut U256) {
+        let len = self.data.len();
+        let base = self.data.as_mut_ptr();
+        (base.add(len - 3), base.add(len - 2), base.add(len - 1))
+    }
+
+    #[inline]
+    unsafe fn top_ptr_unchecked(&mut self) -> *mut U256 {
+        let len = self.data.len();
+        self.data.as_mut_ptr().add(len - 1)
     }
 
     #[inline]
@@ -115,13 +139,11 @@ impl StackTr for Stack {
     }
 
     #[inline]
-    unsafe fn data_ptr_mut(&mut self) -> *mut U256 {
-        self.data.as_mut_ptr()
-    }
-
-    #[inline]
-    unsafe fn set_len_unchecked(&mut self, new_len: usize) {
-        self.data.set_len(new_len);
+    unsafe fn push_uninit_unchecked(&mut self) -> *mut U256 {
+        let len = self.data.len();
+        let ptr = self.data.as_mut_ptr().add(len);
+        self.data.set_len(len + 1);
+        ptr
     }
 }
 
@@ -288,6 +310,43 @@ impl Stack {
             // SAFETY: Check for out of bounds is done above and it makes this safe to do.
             unsafe {
                 let ptr = self.data.as_mut_ptr().add(len);
+                #[cfg(target_os = "zkvm")]
+                {
+                    // Hand-rolled 32-byte copy as 8 lw+sw on RV32IM. Bypasses
+                    // ptr::copy_nonoverlapping which can lower to a memcpy call.
+                    let dst = ptr as *mut u32;
+                    let src = (ptr as *const u32).sub(n * 8);
+                    core::arch::asm!(
+                        "lw {t0}, 0({src})",
+                        "lw {t1}, 4({src})",
+                        "lw {t2}, 8({src})",
+                        "lw {t3}, 12({src})",
+                        "lw {t4}, 16({src})",
+                        "lw {t5}, 20({src})",
+                        "lw {t6}, 24({src})",
+                        "lw {t7}, 28({src})",
+                        "sw {t0}, 0({dst})",
+                        "sw {t1}, 4({dst})",
+                        "sw {t2}, 8({dst})",
+                        "sw {t3}, 12({dst})",
+                        "sw {t4}, 16({dst})",
+                        "sw {t5}, 20({dst})",
+                        "sw {t6}, 24({dst})",
+                        "sw {t7}, 28({dst})",
+                        src = in(reg) src,
+                        dst = in(reg) dst,
+                        t0 = out(reg) _,
+                        t1 = out(reg) _,
+                        t2 = out(reg) _,
+                        t3 = out(reg) _,
+                        t4 = out(reg) _,
+                        t5 = out(reg) _,
+                        t6 = out(reg) _,
+                        t7 = out(reg) _,
+                        options(nostack, preserves_flags),
+                    );
+                }
+                #[cfg(not(target_os = "zkvm"))]
                 ptr::copy_nonoverlapping(ptr.sub(n), ptr, 1);
                 self.data.set_len(len + 1);
             }
@@ -324,12 +383,45 @@ impl Stack {
         }
         // SAFETY: `n` and `n_m` are checked to be within bounds, and they don't overlap.
         unsafe {
-            // Note: `ptr::swap_nonoverlapping` is more efficient than `slice::swap` or `ptr::swap`
-            // because it operates under the assumption that the pointers do not overlap,
-            // eliminating an intermediate copy,
-            // which is a condition we know to be true in this context.
             let top = self.data.as_mut_ptr().add(len - 1);
-            core::ptr::swap_nonoverlapping(top.sub(n), top.sub(n_m_index), 1);
+            #[cfg(target_os = "zkvm")]
+            {
+                // Swap two 32-byte words limb-by-limb on RV32IM. Bypasses
+                // ptr::swap_nonoverlapping which can lower to memcpy intrinsics.
+                let a = top.sub(n) as *mut u32;
+                let b = top.sub(n_m_index) as *mut u32;
+                core::arch::asm!(
+                    "lw {t0},  0({a})", "lw {t1},  0({b})",
+                    "sw {t0},  0({b})", "sw {t1},  0({a})",
+                    "lw {t0},  4({a})", "lw {t1},  4({b})",
+                    "sw {t0},  4({b})", "sw {t1},  4({a})",
+                    "lw {t0},  8({a})", "lw {t1},  8({b})",
+                    "sw {t0},  8({b})", "sw {t1},  8({a})",
+                    "lw {t0}, 12({a})", "lw {t1}, 12({b})",
+                    "sw {t0}, 12({b})", "sw {t1}, 12({a})",
+                    "lw {t0}, 16({a})", "lw {t1}, 16({b})",
+                    "sw {t0}, 16({b})", "sw {t1}, 16({a})",
+                    "lw {t0}, 20({a})", "lw {t1}, 20({b})",
+                    "sw {t0}, 20({b})", "sw {t1}, 20({a})",
+                    "lw {t0}, 24({a})", "lw {t1}, 24({b})",
+                    "sw {t0}, 24({b})", "sw {t1}, 24({a})",
+                    "lw {t0}, 28({a})", "lw {t1}, 28({b})",
+                    "sw {t0}, 28({b})", "sw {t1}, 28({a})",
+                    a = in(reg) a,
+                    b = in(reg) b,
+                    t0 = out(reg) _,
+                    t1 = out(reg) _,
+                    options(nostack, preserves_flags),
+                );
+            }
+            #[cfg(not(target_os = "zkvm"))]
+            {
+                // Note: `ptr::swap_nonoverlapping` is more efficient than `slice::swap` or `ptr::swap`
+                // because it operates under the assumption that the pointers do not overlap,
+                // eliminating an intermediate copy,
+                // which is a condition we know to be true in this context.
+                core::ptr::swap_nonoverlapping(top.sub(n), top.sub(n_m_index), 1);
+            }
         }
         true
     }

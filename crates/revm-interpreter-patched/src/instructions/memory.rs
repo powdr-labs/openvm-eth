@@ -12,8 +12,64 @@ pub fn mload<WIRE: InterpreterTypes, H: Host + ?Sized>(context: InstructionConte
     popn_top!([], top, context.interpreter);
     let offset = as_usize_or_fail!(context.interpreter, top);
     resize_memory!(context.interpreter, context.host.gas_params(), offset, 32);
-    *top =
-        U256::try_from_be_slice(context.interpreter.memory.slice_len(offset, 32).as_ref()).unwrap()
+    #[cfg(target_os = "zkvm")]
+    unsafe {
+        let slice = context.interpreter.memory.slice_len(offset, 32);
+        let src = slice.as_ref().as_ptr() as *const u32;
+        let dst = top as *mut U256 as *mut u32;
+        let m1: u32 = 0x00FF_0000;
+        // 8-limb byteswap: mem[offset+i*4] (LE u32) → byteswap → dst u32[7-i].
+        core::arch::asm!(
+            "srli {m2}, {m1}, 8",
+            "lw   {x},  0({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+            "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+            "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+            "sw   {r}, 28({d})",
+            "lw   {x},  4({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+            "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+            "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+            "sw   {r}, 24({d})",
+            "lw   {x},  8({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+            "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+            "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+            "sw   {r}, 20({d})",
+            "lw   {x}, 12({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+            "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+            "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+            "sw   {r}, 16({d})",
+            "lw   {x}, 16({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+            "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+            "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+            "sw   {r}, 12({d})",
+            "lw   {x}, 20({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+            "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+            "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+            "sw   {r},  8({d})",
+            "lw   {x}, 24({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+            "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+            "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+            "sw   {r},  4({d})",
+            "lw   {x}, 28({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+            "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+            "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+            "sw   {r},  0({d})",
+            s = in(reg) src,
+            d = in(reg) dst,
+            m1 = in(reg) m1,
+            m2 = out(reg) _,
+            x = out(reg) _,
+            r = out(reg) _,
+            t1 = out(reg) _,
+            options(nostack, preserves_flags),
+        );
+    }
+    #[cfg(not(target_os = "zkvm"))]
+    {
+        *top = U256::try_from_be_slice(
+            context.interpreter.memory.slice_len(offset, 32).as_ref(),
+        )
+        .unwrap();
+    }
 }
 
 /// Implements the MSTORE instruction.

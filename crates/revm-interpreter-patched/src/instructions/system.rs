@@ -105,17 +105,77 @@ pub fn codecopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
 /// Loads 32 bytes of input data from the specified offset.
 pub fn calldataload<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H, WIRE>) {
     popn_top!([], offset_ptr, context.interpreter);
-    let mut word = B256::ZERO;
     let offset = as_usize_saturated!(offset_ptr);
+
+    #[cfg(target_os = "zkvm")]
+    {
+        // Fast path: full 32 bytes available from CallInput::Bytes. This is
+        // the common case (function selector + aligned argument reads). We
+        // byteswap directly into the destination U256 via inline asm, same
+        // shape as MLOAD.
+        if let CallInput::Bytes(bytes) = context.interpreter.input.input() {
+            if offset + 32 <= bytes.len() {
+                unsafe {
+                    let src = bytes.as_ptr().add(offset);
+                    let dst = offset_ptr as *mut U256 as *mut u32;
+                    let m1: u32 = 0x00FF_0000;
+                    core::arch::asm!(
+                        "srli {m2}, {m1}, 8",
+                        "lw   {x},  0({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+                        "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+                        "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+                        "sw   {r}, 28({d})",
+                        "lw   {x},  4({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+                        "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+                        "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+                        "sw   {r}, 24({d})",
+                        "lw   {x},  8({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+                        "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+                        "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+                        "sw   {r}, 20({d})",
+                        "lw   {x}, 12({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+                        "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+                        "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+                        "sw   {r}, 16({d})",
+                        "lw   {x}, 16({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+                        "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+                        "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+                        "sw   {r}, 12({d})",
+                        "lw   {x}, 20({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+                        "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+                        "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+                        "sw   {r},  8({d})",
+                        "lw   {x}, 24({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+                        "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+                        "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+                        "sw   {r},  4({d})",
+                        "lw   {x}, 28({s})", "slli {t1}, {x}, 24", "srli {r}, {x}, 24", "or {r}, {r}, {t1}",
+                        "slli {t1}, {x}, 8", "and {t1}, {t1}, {m1}", "or {r}, {r}, {t1}",
+                        "srli {t1}, {x}, 8", "and {t1}, {t1}, {m2}", "or {r}, {r}, {t1}",
+                        "sw   {r},  0({d})",
+                        s = in(reg) src,
+                        d = in(reg) dst,
+                        m1 = in(reg) m1,
+                        m2 = out(reg) _,
+                        x = out(reg) _,
+                        r = out(reg) _,
+                        t1 = out(reg) _,
+                        options(nostack, preserves_flags),
+                    );
+                }
+                return;
+            }
+        }
+    }
+
+    // Slow path: partial reads, SharedBuffer, or offset beyond input.
+    let mut word = B256::ZERO;
     let input = context.interpreter.input.input();
     let input_len = input.len();
     if offset < input_len {
         let count = 32.min(input_len - offset);
 
         // SAFETY: `count` is bounded by the calldata length.
-        // This is `word[..count].copy_from_slice(input[offset..offset + count])`, written using
-        // raw pointers as apparently the compiler cannot optimize the slice version, and using
-        // `get_unchecked` twice is uglier.
         match context.interpreter.input.input() {
             CallInput::Bytes(bytes) => {
                 unsafe {

@@ -24,24 +24,6 @@ pub fn jumpi<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, 
     if !cond.is_zero() {
         jump_inner(context.interpreter, target);
     }
-    // openvm: every JUMPI fall-through OR taken-target lands at a new
-    // basic-block boundary. Do the AOT lookup here so step() doesn't have
-    // to check at every opcode. Skip entirely for contracts with no AOT
-    // entries — saves the per-pc table load + zero-check for them.
-    #[cfg(feature = "evm-bb-aot")]
-    {
-        if context.interpreter.bytecode.aot_present() {
-            let idx = context.interpreter.bytecode.bb_walker_idx();
-            if idx != 0 {
-                let entry = &crate::bb_walker_table::BB_WALKER_TABLE[(idx - 1) as usize];
-                crate::aot_bb_shapes::dispatch_shape(
-                    entry.shape_id,
-                    context.interpreter,
-                    context.host,
-                );
-            }
-        }
-    }
 }
 
 /// Internal helper function for jump operations.
@@ -61,32 +43,7 @@ fn jump_inner<WIRE: InterpreterTypes>(interpreter: &mut Interpreter<WIRE>, targe
 /// Implements the JUMPDEST instruction.
 ///
 /// Marks a valid destination for jump operations.
-pub fn jumpdest<WIRE: InterpreterTypes, H: ?Sized>(_context: InstructionContext<'_, H, WIRE>) {
-    // openvm: JUMPDEST is the canonical BB boundary. step() already advanced
-    // pc by 1 (past the JUMPDEST byte) AND debited 1 gas for the JUMPDEST.
-    // Rewind pc to the JUMPDEST byte; refund the 1 gas so the BB handler can
-    // pre-charge the whole BB's static gas without double-counting.
-    // Skip entirely for contracts with no AOT entries.
-    #[cfg(feature = "evm-bb-aot")]
-    {
-        if !_context.interpreter.bytecode.aot_present() {
-            return;
-        }
-        _context.interpreter.bytecode.relative_jump(-1);
-        let idx = _context.interpreter.bytecode.bb_walker_idx();
-        if idx != 0 {
-            _context.interpreter.gas.refund_remaining(1);
-            let entry = &crate::bb_walker_table::BB_WALKER_TABLE[(idx - 1) as usize];
-            crate::aot_bb_shapes::dispatch_shape(
-                entry.shape_id,
-                _context.interpreter,
-                _context.host,
-            );
-            return;
-        }
-        _context.interpreter.bytecode.relative_jump(1);
-    }
-}
+pub fn jumpdest<WIRE: InterpreterTypes, H: ?Sized>(_context: InstructionContext<'_, H, WIRE>) {}
 
 /// Implements the PC instruction.
 ///

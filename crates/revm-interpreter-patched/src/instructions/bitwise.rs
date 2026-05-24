@@ -8,14 +8,126 @@ use primitives::U256;
 
 /// Implements the LT instruction - less than comparison.
 pub fn lt<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H, WIRE>) {
-    popn_top!([op1], op2, context.interpreter);
-    *op2 = U256::from(op1 < *op2);
+    #[cfg(target_os = "zkvm")]
+    {
+        if context.interpreter.stack.len() < 2 {
+            context.interpreter.halt_underflow();
+            return;
+        }
+        unsafe {
+            let (dst, src) = context.interpreter.stack.top_pair_ptr_unchecked();
+            let d = dst as *mut u32;
+            let s = src as *const u32;
+            // 8-limb unsigned sub-borrow chain (s - d). Final borrow = (s < d).
+            core::arch::asm!(
+                "lw   {aw},  0({s})",
+                "lw   {bw},  0({d})",
+                "sltu {c}, {aw}, {bw}",
+                "lw   {aw},  4({s})", "lw {bw},  4({d})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw},  8({s})", "lw {bw},  8({d})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 12({s})", "lw {bw}, 12({d})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 16({s})", "lw {bw}, 16({d})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 20({s})", "lw {bw}, 20({d})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 24({s})", "lw {bw}, 24({d})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 28({s})", "lw {bw}, 28({d})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "sw   {c},  0({d})",
+                "sw   zero,  4({d})", "sw zero,  8({d})", "sw zero, 12({d})",
+                "sw   zero, 16({d})", "sw zero, 20({d})", "sw zero, 24({d})",
+                "sw   zero, 28({d})",
+                d = in(reg) d,
+                s = in(reg) s,
+                aw = out(reg) _,
+                bw = out(reg) _,
+                r = out(reg) _,
+                c = out(reg) _,
+                t = out(reg) _,
+                u = out(reg) _,
+                options(nostack, preserves_flags),
+            );
+            context.interpreter.stack.shrink_unchecked(1);
+        }
+    }
+    #[cfg(not(target_os = "zkvm"))]
+    {
+        popn_top!([op1], op2, context.interpreter);
+        *op2 = U256::from(op1 < *op2);
+    }
 }
 
 /// Implements the GT instruction - greater than comparison.
 pub fn gt<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H, WIRE>) {
-    popn_top!([op1], op2, context.interpreter);
-    *op2 = U256::from(op1 > *op2);
+    #[cfg(target_os = "zkvm")]
+    {
+        if context.interpreter.stack.len() < 2 {
+            context.interpreter.halt_underflow();
+            return;
+        }
+        unsafe {
+            let (dst, src) = context.interpreter.stack.top_pair_ptr_unchecked();
+            let d = dst as *mut u32;
+            let s = src as *const u32;
+            // GT(s, d) = LT(d, s). Subtract d - s, final borrow = result.
+            core::arch::asm!(
+                "lw   {aw},  0({d})",
+                "lw   {bw},  0({s})",
+                "sltu {c}, {aw}, {bw}",
+                "lw   {aw},  4({d})", "lw {bw},  4({s})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw},  8({d})", "lw {bw},  8({s})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 12({d})", "lw {bw}, 12({s})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 16({d})", "lw {bw}, 16({s})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 20({d})", "lw {bw}, 20({s})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 24({d})", "lw {bw}, 24({s})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 28({d})", "lw {bw}, 28({s})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "sw   {c},  0({d})",
+                "sw   zero,  4({d})", "sw zero,  8({d})", "sw zero, 12({d})",
+                "sw   zero, 16({d})", "sw zero, 20({d})", "sw zero, 24({d})",
+                "sw   zero, 28({d})",
+                d = in(reg) d,
+                s = in(reg) s,
+                aw = out(reg) _,
+                bw = out(reg) _,
+                r = out(reg) _,
+                c = out(reg) _,
+                t = out(reg) _,
+                u = out(reg) _,
+                options(nostack, preserves_flags),
+            );
+            context.interpreter.stack.shrink_unchecked(1);
+        }
+    }
+    #[cfg(not(target_os = "zkvm"))]
+    {
+        popn_top!([op1], op2, context.interpreter);
+        *op2 = U256::from(op1 > *op2);
+    }
 }
 
 /// Implements the CLZ instruction - count leading zeros.
@@ -30,64 +142,410 @@ pub fn clz<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H,
 ///
 /// Signed less than comparison of two values from stack.
 pub fn slt<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H, WIRE>) {
-    popn_top!([op1], op2, context.interpreter);
-    *op2 = U256::from(i256_cmp(&op1, op2) == Ordering::Less);
+    #[cfg(target_os = "zkvm")]
+    {
+        if context.interpreter.stack.len() < 2 {
+            context.interpreter.halt_underflow();
+            return;
+        }
+        unsafe {
+            let (dst, src) = context.interpreter.stack.top_pair_ptr_unchecked();
+            let d = dst as *mut u32;
+            let s = src as *const u32;
+            let sign_mask: u32 = 0x8000_0000;
+            // Signed (s < d): XOR the MSB limb (28..31) of both with sign bit,
+            // then unsigned compare. Final borrow chain gives result.
+            core::arch::asm!(
+                "lw   {aw},  0({s})",
+                "lw   {bw},  0({d})",
+                "sltu {c}, {aw}, {bw}",
+                "lw   {aw},  4({s})", "lw {bw},  4({d})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw},  8({s})", "lw {bw},  8({d})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 12({s})", "lw {bw}, 12({d})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 16({s})", "lw {bw}, 16({d})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 20({s})", "lw {bw}, 20({d})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 24({s})", "lw {bw}, 24({d})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 28({s})", "lw {bw}, 28({d})",
+                "xor  {aw}, {aw}, {m}", "xor {bw}, {bw}, {m}",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "sw   {c},  0({d})",
+                "sw   zero,  4({d})", "sw zero,  8({d})", "sw zero, 12({d})",
+                "sw   zero, 16({d})", "sw zero, 20({d})", "sw zero, 24({d})",
+                "sw   zero, 28({d})",
+                d = in(reg) d,
+                s = in(reg) s,
+                m = in(reg) sign_mask,
+                aw = out(reg) _,
+                bw = out(reg) _,
+                r = out(reg) _,
+                c = out(reg) _,
+                t = out(reg) _,
+                u = out(reg) _,
+                options(nostack, preserves_flags),
+            );
+            context.interpreter.stack.shrink_unchecked(1);
+        }
+    }
+    #[cfg(not(target_os = "zkvm"))]
+    {
+        popn_top!([op1], op2, context.interpreter);
+        *op2 = U256::from(i256_cmp(&op1, op2) == Ordering::Less);
+    }
 }
 
 /// Implements the SGT instruction.
 ///
 /// Signed greater than comparison of two values from stack.
 pub fn sgt<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H, WIRE>) {
-    popn_top!([op1], op2, context.interpreter);
-    *op2 = U256::from(i256_cmp(&op1, op2) == Ordering::Greater);
+    #[cfg(target_os = "zkvm")]
+    {
+        if context.interpreter.stack.len() < 2 {
+            context.interpreter.halt_underflow();
+            return;
+        }
+        unsafe {
+            let (dst, src) = context.interpreter.stack.top_pair_ptr_unchecked();
+            let d = dst as *mut u32;
+            let s = src as *const u32;
+            let sign_mask: u32 = 0x8000_0000;
+            // Signed (s > d) = signed (d < s). Subtract d - s with MSB flipped.
+            core::arch::asm!(
+                "lw   {aw},  0({d})",
+                "lw   {bw},  0({s})",
+                "sltu {c}, {aw}, {bw}",
+                "lw   {aw},  4({d})", "lw {bw},  4({s})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw},  8({d})", "lw {bw},  8({s})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 12({d})", "lw {bw}, 12({s})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 16({d})", "lw {bw}, 16({s})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 20({d})", "lw {bw}, 20({s})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 24({d})", "lw {bw}, 24({s})",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "lw   {aw}, 28({d})", "lw {bw}, 28({s})",
+                "xor  {aw}, {aw}, {m}", "xor {bw}, {bw}, {m}",
+                "sub  {r}, {aw}, {bw}", "sltu {t}, {aw}, {bw}",
+                "sltu {u}, {r}, {c}", "or {c}, {t}, {u}",
+                "sw   {c},  0({d})",
+                "sw   zero,  4({d})", "sw zero,  8({d})", "sw zero, 12({d})",
+                "sw   zero, 16({d})", "sw zero, 20({d})", "sw zero, 24({d})",
+                "sw   zero, 28({d})",
+                d = in(reg) d,
+                s = in(reg) s,
+                m = in(reg) sign_mask,
+                aw = out(reg) _,
+                bw = out(reg) _,
+                r = out(reg) _,
+                c = out(reg) _,
+                t = out(reg) _,
+                u = out(reg) _,
+                options(nostack, preserves_flags),
+            );
+            context.interpreter.stack.shrink_unchecked(1);
+        }
+    }
+    #[cfg(not(target_os = "zkvm"))]
+    {
+        popn_top!([op1], op2, context.interpreter);
+        *op2 = U256::from(i256_cmp(&op1, op2) == Ordering::Greater);
+    }
 }
 
 /// Implements the EQ instruction.
 ///
 /// Equality comparison of two values from stack.
 pub fn eq<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H, WIRE>) {
-    popn_top!([op1], op2, context.interpreter);
-    *op2 = U256::from(op1 == *op2);
+    #[cfg(target_os = "zkvm")]
+    {
+        if context.interpreter.stack.len() < 2 {
+            context.interpreter.halt_underflow();
+            return;
+        }
+        unsafe {
+            let (dst, src) = context.interpreter.stack.top_pair_ptr_unchecked();
+            let d = dst as *mut u32;
+            let s = src as *const u32;
+            core::arch::asm!(
+                "lw   {a},  0({d})",
+                "lw   {b},  0({s})",
+                "xor  {acc}, {a}, {b}",
+                "lw   {a},  4({d})",
+                "lw   {b},  4({s})",
+                "xor  {a}, {a}, {b}",
+                "or   {acc}, {acc}, {a}",
+                "lw   {a},  8({d})",
+                "lw   {b},  8({s})",
+                "xor  {a}, {a}, {b}",
+                "or   {acc}, {acc}, {a}",
+                "lw   {a}, 12({d})",
+                "lw   {b}, 12({s})",
+                "xor  {a}, {a}, {b}",
+                "or   {acc}, {acc}, {a}",
+                "lw   {a}, 16({d})",
+                "lw   {b}, 16({s})",
+                "xor  {a}, {a}, {b}",
+                "or   {acc}, {acc}, {a}",
+                "lw   {a}, 20({d})",
+                "lw   {b}, 20({s})",
+                "xor  {a}, {a}, {b}",
+                "or   {acc}, {acc}, {a}",
+                "lw   {a}, 24({d})",
+                "lw   {b}, 24({s})",
+                "xor  {a}, {a}, {b}",
+                "or   {acc}, {acc}, {a}",
+                "lw   {a}, 28({d})",
+                "lw   {b}, 28({s})",
+                "xor  {a}, {a}, {b}",
+                "or   {acc}, {acc}, {a}",
+                // acc == 0 iff all limbs equal
+                "sltiu {acc}, {acc}, 1",
+                "sw   {acc},  0({d})",
+                "sw   zero,  4({d})",
+                "sw   zero,  8({d})",
+                "sw   zero, 12({d})",
+                "sw   zero, 16({d})",
+                "sw   zero, 20({d})",
+                "sw   zero, 24({d})",
+                "sw   zero, 28({d})",
+                d = in(reg) d,
+                s = in(reg) s,
+                a = out(reg) _,
+                b = out(reg) _,
+                acc = out(reg) _,
+                options(nostack, preserves_flags),
+            );
+            context.interpreter.stack.shrink_unchecked(1);
+        }
+    }
+    #[cfg(not(target_os = "zkvm"))]
+    {
+        popn_top!([op1], op2, context.interpreter);
+        *op2 = U256::from(op1 == *op2);
+    }
 }
 
 /// Implements the ISZERO instruction.
 ///
 /// Checks if the top stack value is zero.
 pub fn iszero<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H, WIRE>) {
-    popn_top!([], op1, context.interpreter);
-    *op1 = U256::from(op1.is_zero());
+    #[cfg(target_os = "zkvm")]
+    {
+        if context.interpreter.stack.len() < 1 {
+            context.interpreter.halt_underflow();
+            return;
+        }
+        unsafe {
+            let top = context.interpreter.stack.top_ptr_unchecked() as *mut u32;
+            core::arch::asm!(
+                "lw   {acc},  0({d})",
+                "lw   {a},   4({d})",
+                "or   {acc}, {acc}, {a}",
+                "lw   {a},   8({d})",
+                "or   {acc}, {acc}, {a}",
+                "lw   {a},  12({d})",
+                "or   {acc}, {acc}, {a}",
+                "lw   {a},  16({d})",
+                "or   {acc}, {acc}, {a}",
+                "lw   {a},  20({d})",
+                "or   {acc}, {acc}, {a}",
+                "lw   {a},  24({d})",
+                "or   {acc}, {acc}, {a}",
+                "lw   {a},  28({d})",
+                "or   {acc}, {acc}, {a}",
+                "sltiu {acc}, {acc}, 1",
+                "sw   {acc},  0({d})",
+                "sw   zero,  4({d})",
+                "sw   zero,  8({d})",
+                "sw   zero, 12({d})",
+                "sw   zero, 16({d})",
+                "sw   zero, 20({d})",
+                "sw   zero, 24({d})",
+                "sw   zero, 28({d})",
+                d = in(reg) top,
+                a = out(reg) _,
+                acc = out(reg) _,
+                options(nostack, preserves_flags),
+            );
+        }
+    }
+    #[cfg(not(target_os = "zkvm"))]
+    {
+        popn_top!([], op1, context.interpreter);
+        *op1 = U256::from(op1.is_zero());
+    }
 }
 
 /// Implements the AND instruction.
 ///
 /// Bitwise AND of two values from stack.
 pub fn bitand<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H, WIRE>) {
-    popn_top!([op1], op2, context.interpreter);
-    *op2 = op1 & *op2;
+    #[cfg(target_os = "zkvm")]
+    {
+        if context.interpreter.stack.len() < 2 {
+            context.interpreter.halt_underflow();
+            return;
+        }
+        unsafe {
+            let (dst, src) = context.interpreter.stack.top_pair_ptr_unchecked();
+            let d = dst as *mut u32;
+            let s = src as *const u32;
+            core::arch::asm!(
+                "lw   {a},  0({d})", "lw  {b},  0({s})", "and {a}, {a}, {b}", "sw  {a},  0({d})",
+                "lw   {a},  4({d})", "lw  {b},  4({s})", "and {a}, {a}, {b}", "sw  {a},  4({d})",
+                "lw   {a},  8({d})", "lw  {b},  8({s})", "and {a}, {a}, {b}", "sw  {a},  8({d})",
+                "lw   {a}, 12({d})", "lw  {b}, 12({s})", "and {a}, {a}, {b}", "sw  {a}, 12({d})",
+                "lw   {a}, 16({d})", "lw  {b}, 16({s})", "and {a}, {a}, {b}", "sw  {a}, 16({d})",
+                "lw   {a}, 20({d})", "lw  {b}, 20({s})", "and {a}, {a}, {b}", "sw  {a}, 20({d})",
+                "lw   {a}, 24({d})", "lw  {b}, 24({s})", "and {a}, {a}, {b}", "sw  {a}, 24({d})",
+                "lw   {a}, 28({d})", "lw  {b}, 28({s})", "and {a}, {a}, {b}", "sw  {a}, 28({d})",
+                d = in(reg) d,
+                s = in(reg) s,
+                a = out(reg) _,
+                b = out(reg) _,
+                options(nostack, preserves_flags),
+            );
+            context.interpreter.stack.shrink_unchecked(1);
+        }
+    }
+    #[cfg(not(target_os = "zkvm"))]
+    {
+        popn_top!([op1], op2, context.interpreter);
+        *op2 = op1 & *op2;
+    }
 }
 
 /// Implements the OR instruction.
 ///
 /// Bitwise OR of two values from stack.
 pub fn bitor<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H, WIRE>) {
-    popn_top!([op1], op2, context.interpreter);
-    *op2 = op1 | *op2;
+    #[cfg(target_os = "zkvm")]
+    {
+        if context.interpreter.stack.len() < 2 {
+            context.interpreter.halt_underflow();
+            return;
+        }
+        unsafe {
+            let (dst, src) = context.interpreter.stack.top_pair_ptr_unchecked();
+            let d = dst as *mut u32;
+            let s = src as *const u32;
+            core::arch::asm!(
+                "lw   {a},  0({d})", "lw  {b},  0({s})", "or  {a}, {a}, {b}", "sw  {a},  0({d})",
+                "lw   {a},  4({d})", "lw  {b},  4({s})", "or  {a}, {a}, {b}", "sw  {a},  4({d})",
+                "lw   {a},  8({d})", "lw  {b},  8({s})", "or  {a}, {a}, {b}", "sw  {a},  8({d})",
+                "lw   {a}, 12({d})", "lw  {b}, 12({s})", "or  {a}, {a}, {b}", "sw  {a}, 12({d})",
+                "lw   {a}, 16({d})", "lw  {b}, 16({s})", "or  {a}, {a}, {b}", "sw  {a}, 16({d})",
+                "lw   {a}, 20({d})", "lw  {b}, 20({s})", "or  {a}, {a}, {b}", "sw  {a}, 20({d})",
+                "lw   {a}, 24({d})", "lw  {b}, 24({s})", "or  {a}, {a}, {b}", "sw  {a}, 24({d})",
+                "lw   {a}, 28({d})", "lw  {b}, 28({s})", "or  {a}, {a}, {b}", "sw  {a}, 28({d})",
+                d = in(reg) d,
+                s = in(reg) s,
+                a = out(reg) _,
+                b = out(reg) _,
+                options(nostack, preserves_flags),
+            );
+            context.interpreter.stack.shrink_unchecked(1);
+        }
+    }
+    #[cfg(not(target_os = "zkvm"))]
+    {
+        popn_top!([op1], op2, context.interpreter);
+        *op2 = op1 | *op2;
+    }
 }
 
 /// Implements the XOR instruction.
 ///
 /// Bitwise XOR of two values from stack.
 pub fn bitxor<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H, WIRE>) {
-    popn_top!([op1], op2, context.interpreter);
-    *op2 = op1 ^ *op2;
+    #[cfg(target_os = "zkvm")]
+    {
+        if context.interpreter.stack.len() < 2 {
+            context.interpreter.halt_underflow();
+            return;
+        }
+        unsafe {
+            let (dst, src) = context.interpreter.stack.top_pair_ptr_unchecked();
+            let d = dst as *mut u32;
+            let s = src as *const u32;
+            core::arch::asm!(
+                "lw   {a},  0({d})", "lw  {b},  0({s})", "xor {a}, {a}, {b}", "sw  {a},  0({d})",
+                "lw   {a},  4({d})", "lw  {b},  4({s})", "xor {a}, {a}, {b}", "sw  {a},  4({d})",
+                "lw   {a},  8({d})", "lw  {b},  8({s})", "xor {a}, {a}, {b}", "sw  {a},  8({d})",
+                "lw   {a}, 12({d})", "lw  {b}, 12({s})", "xor {a}, {a}, {b}", "sw  {a}, 12({d})",
+                "lw   {a}, 16({d})", "lw  {b}, 16({s})", "xor {a}, {a}, {b}", "sw  {a}, 16({d})",
+                "lw   {a}, 20({d})", "lw  {b}, 20({s})", "xor {a}, {a}, {b}", "sw  {a}, 20({d})",
+                "lw   {a}, 24({d})", "lw  {b}, 24({s})", "xor {a}, {a}, {b}", "sw  {a}, 24({d})",
+                "lw   {a}, 28({d})", "lw  {b}, 28({s})", "xor {a}, {a}, {b}", "sw  {a}, 28({d})",
+                d = in(reg) d,
+                s = in(reg) s,
+                a = out(reg) _,
+                b = out(reg) _,
+                options(nostack, preserves_flags),
+            );
+            context.interpreter.stack.shrink_unchecked(1);
+        }
+    }
+    #[cfg(not(target_os = "zkvm"))]
+    {
+        popn_top!([op1], op2, context.interpreter);
+        *op2 = op1 ^ *op2;
+    }
 }
 
 /// Implements the NOT instruction.
 ///
 /// Bitwise NOT (negation) of the top stack value.
 pub fn not<WIRE: InterpreterTypes, H: ?Sized>(context: InstructionContext<'_, H, WIRE>) {
-    popn_top!([], op1, context.interpreter);
-    *op1 = !*op1;
+    #[cfg(target_os = "zkvm")]
+    {
+        if context.interpreter.stack.len() < 1 {
+            context.interpreter.halt_underflow();
+            return;
+        }
+        unsafe {
+            let top = context.interpreter.stack.top_ptr_unchecked() as *mut u32;
+            core::arch::asm!(
+                "lw   {a},  0({d})", "xori {a}, {a}, -1", "sw  {a},  0({d})",
+                "lw   {a},  4({d})", "xori {a}, {a}, -1", "sw  {a},  4({d})",
+                "lw   {a},  8({d})", "xori {a}, {a}, -1", "sw  {a},  8({d})",
+                "lw   {a}, 12({d})", "xori {a}, {a}, -1", "sw  {a}, 12({d})",
+                "lw   {a}, 16({d})", "xori {a}, {a}, -1", "sw  {a}, 16({d})",
+                "lw   {a}, 20({d})", "xori {a}, {a}, -1", "sw  {a}, 20({d})",
+                "lw   {a}, 24({d})", "xori {a}, {a}, -1", "sw  {a}, 24({d})",
+                "lw   {a}, 28({d})", "xori {a}, {a}, -1", "sw  {a}, 28({d})",
+                d = in(reg) top,
+                a = out(reg) _,
+                options(nostack, preserves_flags),
+            );
+        }
+    }
+    #[cfg(not(target_os = "zkvm"))]
+    {
+        popn_top!([], op1, context.interpreter);
+        *op1 = !*op1;
+    }
 }
 
 /// Implements the BYTE instruction.

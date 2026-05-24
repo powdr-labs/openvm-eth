@@ -48,18 +48,6 @@ arbitrary = [
 default = ["std"]
 hashbrown = ["primitives/hashbrown"]
 memory_limit = []
-# Runtime "JIT" basic-block transpiler: at each EVM opcode, check the
-# bytecode bytes against known patterns; on hit, dispatch to a transpiled
-# RV32IM handler. No build-time table needed.
-evm-jit = []
-# Build-time AOT basic-block transpiler: each (code_hash, pc) that matches
-# a known pattern is precomputed offline and embedded as a const lookup
-# table. At runtime, step() consults a per-contract u16 dispatch table.
-evm-aot = []
-# Build-time AOT for every pure basic block in the corpus (generic — not
-# tied to named patterns). Emits a per-contract dispatch table mapping
-# `(code_hash, pc)` -> `BbDesc`. step() invokes a single generic walker.
-evm-bb-aot = []
 serde = [
     "dep:serde",
     "primitives/serde",
