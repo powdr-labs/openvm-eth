@@ -410,7 +410,7 @@ pub async fn precompute_prover_data(
     let pipeline = StagedPipeline::new(original_program, Some(args.artifacts_dir.clone()));
 
     let select = SelectConfig::new(args.apc as u64, args.apc_skip as u64);
-    let mut generate = default_generate_config().with_select_defaults(pgo_type, select);
+    let mut generate = default_generate_config();
 
     if let Ok(path) = std::env::var("POWDR_APC_CANDIDATES_DIR") {
         fs::create_dir_all(&path)?;
