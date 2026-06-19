@@ -2,7 +2,7 @@
 #![cfg_attr(feature = "tco", feature(explicit_tail_calls))]
 use std::{fs, io::Write, path::PathBuf, time::Instant};
 
-use powdr_openvm_riscv::StagedPipeline;
+use powdr_openvm::StagedPipeline;
 
 use alloy_provider::RootProvider;
 use alloy_rpc_client::RpcClient;
