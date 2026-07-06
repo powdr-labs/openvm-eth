@@ -9,9 +9,12 @@ per-candidate exports `apc_candidate_<pcs>_000_unopt.json` (the SymbolicMachine
 exactly as it enters optimize(), with its bus map) and
 `apc_candidate_<pcs>_001.json` (the optimized result).
 
-Output: `<out>/apc_<rank>_pc<pcs>.json.gz` (unopt) and
-`<out>/apc_<rank>_pc<pcs>.powdr_opt.json.gz` (optimized) for the top N
-candidates by cost, plus `<out>/manifest.json` with the ranking metadata.
+Output: `<out>/apc_<rank>_pc<hex_pcs>.json.gz` (unopt) and
+`<out>/apc_<rank>_pc<hex_pcs>.powdr_opt.json.gz` (optimized) for the top N
+candidates by cost, where <hex_pcs> is the block's start PC(s) in hex (matching
+the autoprecompile-analyzer, which addresses blocks as e.g. 0x4ed070). Also
+writes `<out>/manifest.json` with the ranking metadata and `<out>/
+apc_candidates.json` (the full powdr summary verbatim, for reference).
 
 Cost (default): width_before x execution_frequency — the trace cells the block
 costs without an APC, matching plot_effectiveness.py's weighted cost axis.
@@ -22,6 +25,7 @@ Uses only the stdlib, so it runs anywhere.
 import argparse
 import gzip
 import json
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,9 +43,14 @@ SORT_KEYS = {
 
 
 def candidate_stub(entry):
-    """File-name stub, matching ExportOptions::new in export.rs."""
-    pcs = [str(b["start_pc"]) for b in entry["original_blocks"]]
-    return "apc_candidate_" + "_".join(pcs), "_".join(pcs)
+    """(input stub, hex PC string). The input stub matches ExportOptions::new in
+    export.rs, which names per-candidate files with DECIMAL start PCs joined by
+    '_'. The hex PC string is for our output file names (e.g. 0x4ed070), joined
+    the same way for multi-block superblocks."""
+    start_pcs = [b["start_pc"] for b in entry["original_blocks"]]
+    input_stub = "apc_candidate_" + "_".join(str(pc) for pc in start_pcs)
+    hex_pcs = "_".join(f"0x{pc:x}" for pc in start_pcs)
+    return input_stub, hex_pcs
 
 
 def gzip_file(src: Path, dst: Path):
@@ -108,9 +117,15 @@ def main():
         print(f"note: only {len(selected)} candidates available (asked for {args.top})")
 
     args.out.mkdir(parents=True, exist_ok=True)
+    # Clear our own previous exports so a re-run (e.g. with different PCs after an
+    # ELF rebuild) doesn't leave stale files behind. Only touch files we produce.
+    for stale in [*args.out.glob("apc_*_pc*.json.gz"), args.out / "apc_candidates.json",
+                  args.out / "apc_candidates.json.gz", args.out / "manifest.json"]:
+        stale.unlink(missing_ok=True)
+
     entries = []
     for rank, entry in enumerate(selected, start=1):
-        stub, pcs = candidate_stub(entry)
+        stub, hex_pcs = candidate_stub(entry)
         unopt_src = args.candidates_dir / f"{stub}_000_unopt.json"
         opt_src = args.candidates_dir / f"{stub}_001.json"
         for src in (unopt_src, opt_src):
@@ -119,8 +134,8 @@ def main():
         check_unopt(unopt_src)
         check_opt(opt_src, entry["stats"]["after"])
 
-        unopt_dst = args.out / f"apc_{rank:03d}_pc{pcs}.json.gz"
-        opt_dst = args.out / f"apc_{rank:03d}_pc{pcs}.powdr_opt.json.gz"
+        unopt_dst = args.out / f"apc_{rank:03d}_pc{hex_pcs}.json.gz"
+        opt_dst = args.out / f"apc_{rank:03d}_pc{hex_pcs}.powdr_opt.json.gz"
         gzip_file(unopt_src, unopt_dst)
         gzip_file(opt_src, opt_dst)
 
@@ -128,6 +143,7 @@ def main():
         entries.append({
             "rank": rank,
             "start_pcs": start_pcs,
+            "start_pcs_hex": [f"0x{pc:x}" for pc in start_pcs],
             "files": {"unopt": unopt_dst.name, "powdr_opt": opt_dst.name},
             "cost": cost(entry),
             "execution_frequency": entry["execution_frequency"],
@@ -153,8 +169,13 @@ def main():
     with open(args.out / "manifest.json", "w") as f:
         json.dump(manifest, f, indent=2)
 
-    print(f"wrote {2 * len(selected)} files + manifest.json to {args.out} "
-          f"(sort key: {args.sort_key})")
+    # Ship the full powdr summary too (uncompressed, so it can be loaded straight
+    # into the autoprecompile-analyzer), so the exact input the ranking was
+    # derived from is available.
+    shutil.copyfile(summary_path, args.out / "apc_candidates.json")
+
+    print(f"wrote {2 * len(selected)} files + manifest.json + apc_candidates.json "
+          f"to {args.out} (sort key: {args.sort_key})")
 
 
 if __name__ == "__main__":
