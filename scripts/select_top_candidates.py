@@ -16,6 +16,14 @@ the autoprecompile-analyzer, which addresses blocks as e.g. 0x4ed070). Also
 writes `<out>/manifest.json` with the ranking metadata and `<out>/
 apc_candidates.json` (the full powdr summary verbatim, for reference).
 
+The .powdr_opt export is the machine as `optimize()` returned it, i.e. *before*
+powdr's add_guards() step, so it brackets optimize() together with the unopt
+input. powdr's per-candidate `_001` file is captured after add_guards(), so we
+undo that step here: every `is_valid` reference is injected by add_guards (the
+pre-optimize machine has none), so substituting is_valid -> 1, constant-folding
+and dropping the constraints that vanish reconstructs the unguarded machine.
+Pass --keep-guards to emit powdr's raw (guarded) `_001` instead.
+
 Cost (default): width_before x execution_frequency — the trace cells the block
 costs without an APC, matching plot_effectiveness.py's weighted cost axis.
 
@@ -78,6 +86,72 @@ def check_opt(path: Path, stats_after):
             f"error: {path}: (constraints, bus_interactions) = {got}, but "
             f"apc_candidates.json stats.after says {want}"
         )
+    return data
+
+
+def _fold(e):
+    """Constant-fold an algebraic-expression tree. Nodes are [l, op, r] with op
+    in {'+','-','*'} or the unary ['-', x]; leaves are ints or 'name@id' refs."""
+    if not isinstance(e, list):
+        return e
+    if len(e) == 2 and e[0] == "-":  # unary negation
+        x = _fold(e[1])
+        return -x if isinstance(x, int) else ["-", x]
+    if len(e) == 3:
+        l, op, r = _fold(e[0]), e[1], _fold(e[2])
+        if isinstance(l, int) and isinstance(r, int):
+            return {"+": l + r, "-": l - r, "*": l * r}[op]
+        if op == "*":
+            if l == 1:
+                return r
+            if r == 1:
+                return l
+            if l == 0 or r == 0:
+                return 0
+        elif op == "+":
+            if l == 0:
+                return r
+            if r == 0:
+                return l
+        elif op == "-":
+            if r == 0:
+                return l
+            if l == 0:
+                return -r if isinstance(r, int) else ["-", r]
+        return [l, op, r]
+    return e
+
+
+def _subst(e, name):
+    """Replace every reference `name` in the expression tree with the integer 1."""
+    if isinstance(e, str):
+        return 1 if e == name else e
+    if isinstance(e, list):
+        if len(e) == 2 and e[0] == "-":
+            return ["-", _subst(e[1], name)]
+        if len(e) == 3:
+            return [_subst(e[0], name), e[1], _subst(e[2], name)]
+    return e
+
+
+def strip_is_valid_guards(machine):
+    """Undo powdr's add_guards() step in place, reconstructing the machine as
+    optimize() returned it. See the module docstring for why is_valid -> 1 is a
+    faithful inverse. Returns True if a guard column was found and removed."""
+    iv = next((name for name, method in machine.get("derived_columns", [])
+               if name.split("@")[0] == "is_valid" and method == {"Constant": 1}), None)
+    if iv is None:
+        return False
+    machine["constraints"] = [
+        f for c in machine["constraints"]
+        # make_bool(is_valid) and (1 - is_valid)*mult guards fold to 0 -> drop them
+        if (f := _fold(_subst(c, iv))) != 0
+    ]
+    for b in machine["bus_interactions"]:
+        b["mult"] = _fold(_subst(b["mult"], iv))
+        b["args"] = [_fold(_subst(a, iv)) for a in b["args"]]
+    machine["derived_columns"] = [dc for dc in machine["derived_columns"] if dc[0] != iv]
+    return True
 
 
 def main():
@@ -91,6 +165,9 @@ def main():
                              "execution_frequency (default: width_before)")
     parser.add_argument("--source", default="", help="free-text provenance note for the manifest "
                         "(e.g. 'openvm-eth block 23992138, powdr <sha>')")
+    parser.add_argument("--keep-guards", action="store_true",
+                        help="emit powdr's raw _001 (after add_guards) as .powdr_opt instead of "
+                             "reconstructing the pre-add_guards optimize() output")
     args = parser.parse_args()
 
     summary_path = args.candidates_dir / "apc_candidates.json"
@@ -132,13 +209,24 @@ def main():
             if not src.exists():
                 sys.exit(f"error: missing per-candidate export {src}")
         check_unopt(unopt_src)
-        check_opt(opt_src, entry["stats"]["after"])
+        opt = check_opt(opt_src, entry["stats"]["after"])
+        # By default reconstruct the pre-add_guards optimize() output so the opt
+        # snapshot brackets optimize() together with the unopt input.
+        if not args.keep_guards:
+            if not strip_is_valid_guards(opt["machine"]):
+                sys.exit(f"error: {opt_src}: no is_valid guard column found to strip "
+                         "(use --keep-guards if this export predates add_guards)")
+            # optimize()'s output carries no optimistic constraints (Apc::new adds
+            # them after add_guards), so match the empty form of the unopt input.
+            opt["optimistic_constraints"] = {k: {} for k in opt.get("optimistic_constraints", {})}
 
         unopt_dst = args.out / f"apc_{rank:03d}_pc{hex_pcs}.json.gz"
         opt_dst = args.out / f"apc_{rank:03d}_pc{hex_pcs}.powdr_opt.json.gz"
         gzip_file(unopt_src, unopt_dst)
-        gzip_file(opt_src, opt_dst)
+        with gzip.open(opt_dst, "wt", compresslevel=9) as f:
+            json.dump(opt, f)
 
+        opt_machine = opt["machine"]
         start_pcs = [b["start_pc"] for b in entry["original_blocks"]]
         entries.append({
             "rank": rank,
@@ -152,6 +240,11 @@ def main():
             "cost_after": entry["cost_after"],
             "value": entry["value"],
             "stats": entry["stats"],
+            # stats["after"] is powdr's guarded count; record what we actually emit.
+            "powdr_opt_stats": {
+                "constraints": len(opt_machine["constraints"]),
+                "bus_interactions": len(opt_machine["bus_interactions"]),
+            },
             "labels": [label for pc in start_pcs for label in labels.get(str(pc), [])],
         })
 
@@ -162,6 +255,8 @@ def main():
             "sort_key": args.sort_key,
             "top": args.top,
             "candidates_available": len(summary["apcs"]),
+            "powdr_opt_stage": ("after add_guards (raw powdr _001)" if args.keep_guards
+                                else "after optimize(), before add_guards (is_valid guards stripped)"),
             "date": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         },
         "entries": entries,
