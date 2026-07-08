@@ -91,7 +91,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --block)
-            BLOCK_NUMBER_OVERRIDE="$2"
+            # Accept a bare block number or a cached witness filename like
+            # `24171384.bin` — the binary wants the plain number.
+            BLOCK_NUMBER_OVERRIDE="${2%.bin}"
+            BLOCK_NUMBER_OVERRIDE="${BLOCK_NUMBER_OVERRIDE##*/}"
             shift 2
             ;;
         --leaf-log-blowup)
