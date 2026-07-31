@@ -90,3 +90,7 @@ halo2-asm = ["halo2-axiom?/asm"]
 cuda = ["dep:openvm-cuda-backend", "openvm-sdk/cuda", "powdr-openvm/cuda", "powdr-openvm-riscv/cuda"]
 unprotected = ["openvm-sdk/unprotected"]
 nvtx = ["openvm-stark-sdk/nvtx"]
+# Link powdr's Lean apc-optimizer in via FFI; building it needs a Lean toolchain
+# (`lean`/`lake`, e.g. via elan) on PATH. Still gated at runtime by
+# POWDR_USE_LEAN_OPTIMIZER — `run.sh --lean-optimizer` sets both halves.
+lean-optimizer = ["powdr-openvm/lean-optimizer", "powdr-openvm-riscv/lean-optimizer"]

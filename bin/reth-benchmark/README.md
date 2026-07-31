@@ -64,7 +64,16 @@ The easiest way to run the benchmark is using the [`run.sh`](../../run.sh) helpe
 
 # Force CUDA acceleration
 ./run.sh --cuda --mode prove-app
+
+# Generate autoprecompiles with powdr's Lean apc-optimizer instead of the
+# native Rust one (needs a Lean toolchain — `lean`/`lake`, e.g. via elan)
+./run.sh --apc 10 --mode compile --lean-optimizer
 ```
+
+`--lean-optimizer` is equivalent to `POWDR_USE_LEAN_OPTIMIZER=1` in the environment:
+either way the script builds with the `lean-optimizer` cargo feature (which links the
+optimizer in via FFI) *and* selects it at runtime. Only one half, and it silently
+falls back to the native optimizer.
 
 **Available modes:**
 - `execute-host` - Execute on the host (no VM)
