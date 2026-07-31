@@ -14,6 +14,8 @@
 #   --apc <N>           Number of autoprecompiles to generate (default: 0 = no APC)
 #   --apc-skip <N>      Skip the first N APC candidates (default: 0)
 #   --pgo-type <KIND>   PGO strategy: cell | instruction | none (default: cell)
+#   --lean-optimizer    Generate APCs with powdr's Lean apc-optimizer (needs a Lean
+#                       toolchain on PATH). Implied by POWDR_USE_LEAN_OPTIMIZER=1.
 #   --max-segment-length <N> Power-of-two cap on per-chip trace height (APC only)
 #   --leaf-log-stacked-height <N>      Override leaf aggregation log_stacked_height
 #   --internal-log-stacked-height <N>  Override internal recursion log_stacked_height
@@ -29,6 +31,7 @@
 #   ./run.sh --perf --mode execute         # Run with host profiling (Firefox Profiler link)
 #   ./run.sh --nsys --mode prove-app      # Run with nsys profiling
 #   ./run.sh --block 23992138             # Prove a specific block
+#   ./run.sh --apc 10 --lean-optimizer    # Generate APCs with the Lean optimizer
 #   ./run.sh --mode generate-vm-vkey      # Generate reth.vm.vk locally
 #   ./run.sh --generate-vm-vkey           # Same as above (shortcut)
 #
@@ -75,6 +78,11 @@ USE_PERF=false
 USE_NSYS=false
 USE_NCU=false
 COMPUTE_SANITIZER_ARGS=""
+# `1`/`true`: the spelling powdr's runtime gate accepts.
+case "${POWDR_USE_LEAN_OPTIMIZER:-}" in
+    1|true) USE_LEAN_OPTIMIZER=true ;;
+    *) USE_LEAN_OPTIMIZER=false ;;
+esac
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -174,6 +182,10 @@ while [[ $# -gt 0 ]]; do
             PGO_TYPE="$2"
             shift 2
             ;;
+        --lean-optimizer)
+            USE_LEAN_OPTIMIZER=true
+            shift
+            ;;
         --max-segment-length)
             MAX_SEGMENT_LENGTH="$2"
             shift 2
@@ -259,6 +271,13 @@ if [ "$USE_NSYS" = "true" ]; then
 fi
 if [ "$MODE" = "prove-evm" ]; then
     FEATURES="$FEATURES,evm-verify"
+fi
+if [ "$USE_LEAN_OPTIMIZER" = "true" ]; then
+    # The feature links the optimizer in, the env var selects it at runtime; either
+    # half alone silently falls back to the native optimizer.
+    FEATURES="$FEATURES,lean-optimizer"
+    export POWDR_USE_LEAN_OPTIMIZER=1
+    echo "Using the Lean apc-optimizer for APC generation."
 fi
 
 arch=$(uname -m)

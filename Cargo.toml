@@ -124,7 +124,12 @@ openvm-stark-sdk = { git = "https://github.com/openvm-org/stark-backend.git", br
 
 # powdr APC toolchain — tracks powdr main. Transitive openvm-org deps pulled
 # in by these crates are redirected via the `[patch]` sections at the bottom
-# of this file to the powdr-labs forks at `v2-powdr-beta.2`.
+# of this file to the powdr-labs forks tagged there.
+#
+# `branch = "main"` is nominal: Cargo.lock pins the rev that actually builds, so
+# refresh it whenever those tags move (`cargo update powdr-openvm …`). If powdr's
+# openvm pin and ours disagree, the two copies collide on `links` and resolution
+# fails outright.
 powdr-autoprecompiles = { git = "https://github.com/powdr-labs/powdr.git", branch = "main", default-features = false }
 powdr-number = { git = "https://github.com/powdr-labs/powdr.git", branch = "main", default-features = false }
 powdr-openvm = { git = "https://github.com/powdr-labs/powdr.git", branch = "main", default-features = false }
@@ -162,7 +167,8 @@ debug = 1
 
 # Redirect every openvm-org git dep (including transitive ones pulled in through
 # powdr, reth-benchmark and the guest) onto the powdr-labs forks at
-# `v2-powdr-beta.2`. These are the same revs pinned by the powdr workspace.
+# `v2.0.0-beta.2-powdr.1`. Same tags the powdr workspace pins — keep in sync with
+# the powdr rev in Cargo.lock (see the note above the powdr deps).
 [patch."https://github.com/openvm-org/openvm.git"]
 openvm = { git = "https://github.com/powdr-labs/openvm.git", tag = "v2.0.0-beta.2-powdr.1" }
 openvm-algebra-circuit = { git = "https://github.com/powdr-labs/openvm.git", tag = "v2.0.0-beta.2-powdr.1" }
